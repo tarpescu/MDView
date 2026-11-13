@@ -384,6 +384,13 @@ MarkdownUI's default providers load images through NetworkImage, which rejects a
 - **Package:** Swift Package Manager, `swift-tools-version: 6.0`, single executable target `MDView` (`Sources/MDView`), macOS 14+.
 - **Info.plist** lives in `Sources/MDView/Resources/` and is *excluded* from the target; `scripts/build-app.sh` copies it into `build/MDView.app/Contents/` together with the release binary, ad-hoc signs the bundle and registers it with Launch Services.
 - **Toolchain:** recent SDKs implement SwiftUI's `@State` as a macro whose implementation (`SwiftUIMacros`) ships with **Xcode**. With only the Command Line Tools active, `swift build` fails with *“plugin for module 'SwiftUIMacros' not found”*; select Xcode with `sudo xcode-select -s /Applications/Xcode.app` or set `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` (the build script does this automatically).
+- **App icon:** `scripts/make-icon.swift` draws the icon with Core Graphics (blue → indigo gradient, paper sheet, Markdown "M↓" mark). It is **full-bleed**: macOS 26+ applies its own squircle mask and puts icons with transparent margins on a grey platter. Regenerate with:
+
+  ```bash
+  swift scripts/make-icon.swift /tmp/icon && iconutil -c icns /tmp/icon/AppIcon.iconset -o Sources/MDView/Resources/AppIcon.icns
+  ```
+
+  `Info.plist` references it via `CFBundleIconFile`, and `build-app.sh` copies it into `Contents/Resources`.
 - **Tests:** `swift test` runs the `MDViewTests` target (Swift Testing, `@testable import MDView`): heading parser and slugs, section splitting, encodings, `TabItem` save/dirty state, statistics, zoom clamping, and PDF pagination/content via PDFKit. Tests avoid `WindowManager`, whose session file lives in the user's real Application Support folder.
 
 ---

@@ -16,9 +16,9 @@ let package = Package(
                 .product(name: "MarkdownUI", package: "swift-markdown-ui")
             ],
             path: "Sources/MDView",
-            // Info.plist is not a SwiftPM resource: it is copied into the
-            // .app bundle by scripts/build-app.sh.
-            exclude: ["Resources/Info.plist"]
+            // Info.plist and the icon are not SwiftPM resources: they are
+            // copied into the .app bundle by scripts/build-app.sh.
+            exclude: ["Resources/Info.plist", "Resources/AppIcon.icns"]
         ),
         .testTarget(
             name: "MDViewTests",

@@ -30,6 +30,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_DIR/MDView" "$APP/Contents/MacOS/MDView"
 cp "$ROOT/Sources/MDView/Resources/Info.plist" "$APP/Contents/Info.plist"
+cp "$ROOT/Sources/MDView/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 
 # SwiftPM resource bundles of dependencies (if any) must sit next to the binary.
 find "$BIN_DIR" -maxdepth 1 -name '*.bundle' -exec cp -R {} "$APP/Contents/Resources/" \;

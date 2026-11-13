@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/assets/icon.png" alt="MDView icon" width="128" height="128">
+
 # MDView
 
 ### A native, lightweight macOS Markdown reader & editor
@@ -163,11 +165,12 @@ The suite (Swift Testing) covers heading parsing and GitHub slugs, section split
 ```
 Package.swift
 scripts/build-app.sh            # release build → build/MDView.app
+scripts/make-icon.swift         # renders the app icon (Core Graphics)
 Sources/MDView/
 ├── MDViewApp.swift             # @main, AppDelegate, menu commands
 ├── Models/                     # TabItem, WindowState/WindowManager, headings, file I/O, printing
 ├── Views/                      # window root, tab bar, content, preview, editor, outline, status bar, settings
-└── Resources/Info.plist        # bundle metadata & document types (used by build-app.sh)
+└── Resources/                  # Info.plist + AppIcon.icns (copied into the bundle by build-app.sh)
 Tests/MDViewTests/              # swift test
 docs/                           # USAGE.md, ARCHITECTURE.md
 ```
