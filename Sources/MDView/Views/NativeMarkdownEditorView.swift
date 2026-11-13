@@ -6,6 +6,7 @@
 //  - Custom NSTextStorage with paragraph-bounded regex syntax highlighting (O(1) on 5,000+ lines)
 //  - Dynamic Font Scaling (Zoom) and Appearance theming (System, Light, Dark, Sepia)
 //  - Markdown keyboard shortcuts: Cmd+B (Bold), Cmd+I (Italic), Cmd+K (Link), Cmd+1/2/3 (Mode switch)
+//  - Native Find bar (Cmd+F), image drag-and-drop as relative Markdown references
 //  - External programmatic scrolling to headings
 //
 
@@ -18,7 +19,11 @@ struct NativeMarkdownEditorView: NSViewRepresentable {
     @Binding var scrollToOffset: Int?
     var fontScale: Double = 1.0
     var appearance: AppAppearance = .system
+    /// Folder of the document, used to make dropped image paths relative.
+    var documentDirectory: URL? = nil
     var onModeSwitch: ((ViewMode) -> Void)?
+    /// Called with Markdown/text files dropped onto the editor (opened as tabs).
+    var onOpenFiles: (([URL]) -> Void)? = nil
     var isEditable: Bool = true
 
     func makeCoordinator() -> Coordinator {
@@ -45,6 +50,12 @@ struct NativeMarkdownEditorView: NSViewRepresentable {
         let textView = MarkdownTextView(frame: NSRect(origin: .zero, size: contentSize), textContainer: textContainer)
         textView.delegate = context.coordinator
         textView.onModeSwitch = onModeSwitch
+        textView.onOpenFiles = onOpenFiles
+        textView.documentDirectory = documentDirectory
+
+        // Find bar (Cmd+F, Cmd+G) via the standard Edit ▸ Find menu
+        textView.usesFindBar = true
+        textView.isIncrementalSearchingEnabled = true
 
         // Typography & Configuration
         let baseFont = NSFont.monospacedSystemFont(ofSize: 13 * fontScale, weight: .regular)
@@ -121,6 +132,8 @@ struct NativeMarkdownEditorView: NSViewRepresentable {
         }
 
         textView.onModeSwitch = onModeSwitch
+        textView.onOpenFiles = onOpenFiles
+        textView.documentDirectory = documentDirectory
     }
 
     // MARK: - Coordinator
@@ -144,9 +157,15 @@ struct NativeMarkdownEditorView: NSViewRepresentable {
 // MARK: - Custom NSTextView with Markdown Formatting Shortcuts
 final class MarkdownTextView: NSTextView {
     var onModeSwitch: ((ViewMode) -> Void)?
+    var onOpenFiles: (([URL]) -> Void)?
+    var documentDirectory: URL?
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        guard event.modifierFlags.contains(.command) else {
+        // Key equivalents are offered to every view in the window, so only act
+        // when this editor has focus and the modifier is exactly ⌘ (leaving
+        // ⇧⌘K, ⌥⌘I, etc. to the menu bar).
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard modifiers == .command, window?.firstResponder === self else {
             return super.performKeyEquivalent(with: event)
         }
 
@@ -186,14 +205,14 @@ final class MarkdownTextView: NSTextView {
             if shouldChangeText(in: currentRange, replacementString: replacement) {
                 replaceCharacters(in: currentRange, with: replacement)
                 didChangeText()
-                setSelectedRange(NSRange(location: currentRange.location + prefix.count, length: currentRange.length))
+                setSelectedRange(NSRange(location: currentRange.location + (prefix as NSString).length, length: currentRange.length))
             }
         } else {
             let replacement = "\(prefix)\(closing)"
             if shouldChangeText(in: currentRange, replacementString: replacement) {
                 replaceCharacters(in: currentRange, with: replacement)
                 didChangeText()
-                setSelectedRange(NSRange(location: currentRange.location + prefix.count, length: 0))
+                setSelectedRange(NSRange(location: currentRange.location + (prefix as NSString).length, length: 0))
             }
         }
     }
@@ -209,7 +228,8 @@ final class MarkdownTextView: NSTextView {
             if shouldChangeText(in: currentRange, replacementString: replacement) {
                 replaceCharacters(in: currentRange, with: replacement)
                 didChangeText()
-                let urlLocation = currentRange.location + selectedText.count + 3
+                // NSRange offsets are UTF-16 based: use NSString length, not Character count.
+                let urlLocation = currentRange.location + (selectedText as NSString).length + 3
                 setSelectedRange(NSRange(location: urlLocation, length: 3))
             }
         } else {
@@ -220,6 +240,62 @@ final class MarkdownTextView: NSTextView {
                 setSelectedRange(NSRange(location: currentRange.location + 1, length: 0))
             }
         }
+    }
+
+    // MARK: - Drag & Drop
+    // Dropped Markdown/text files open as tabs; dropped images are inserted as
+    // `![name](relative/path)` references. Anything else falls back to the
+    // default NSTextView behaviour.
+    private func droppedFileURLs(_ sender: NSDraggingInfo) -> [URL] {
+        let options: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
+        return sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: options) as? [URL] ?? []
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let urls = droppedFileURLs(sender)
+        guard !urls.isEmpty else { return super.performDragOperation(sender) }
+
+        if let onOpenFiles, urls.allSatisfy(MarkdownFile.isOpenable) {
+            onOpenFiles(urls)
+            return true
+        }
+
+        if urls.allSatisfy(MarkdownFile.isImage) {
+            let dropPoint = convert(sender.draggingLocation, from: nil)
+            let insertionIndex = characterIndexForInsertion(at: dropPoint)
+            let snippet = urls.map(imageReference(for:)).joined(separator: "\n")
+            let range = NSRange(location: insertionIndex, length: 0)
+            if shouldChangeText(in: range, replacementString: snippet) {
+                replaceCharacters(in: range, with: snippet)
+                didChangeText()
+                setSelectedRange(NSRange(location: insertionIndex + (snippet as NSString).length, length: 0))
+            }
+            window?.makeFirstResponder(self)
+            return true
+        }
+
+        return super.performDragOperation(sender)
+    }
+
+    private func imageReference(for url: URL) -> String {
+        let altText = url.deletingPathExtension().lastPathComponent
+        let path = documentDirectory.flatMap { relativePath(from: $0, to: url) } ?? url.path
+        // Spaces and parentheses would break the Markdown link destination.
+        let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? path
+        return "![\(altText)](\(encoded))"
+    }
+
+    /// Relative path from `directory` to `file`, e.g. "assets/diagram.png" or "../img/a.png".
+    private func relativePath(from directory: URL, to file: URL) -> String? {
+        let base = directory.standardizedFileURL.pathComponents
+        let target = file.standardizedFileURL.pathComponents
+        var common = 0
+        while common < base.count, common < target.count, base[common] == target[common] {
+            common += 1
+        }
+        guard common > 1 else { return nil } // nothing shared but "/"
+        let ups = Array(repeating: "..", count: base.count - common)
+        return (ups + target[common...]).joined(separator: "/")
     }
 }
 
@@ -252,7 +328,13 @@ final class MarkdownTextStorage: NSTextStorage {
         let descriptor = NSFont.monospacedSystemFont(ofSize: size, weight: .regular).fontDescriptor.withSymbolicTraits(.italic)
         self.italicFont = NSFont(descriptor: descriptor, size: size) ?? defaultFont
 
-        applySyntaxHighlighting(forceFull: true)
+        // Mark the whole buffer as edited: processEditing() re-highlights it and
+        // the layout manager is told to re-layout with the new fonts/colours.
+        let fullRange = NSRange(location: 0, length: backingStore.length)
+        guard fullRange.length > 0 else { return }
+        beginEditing()
+        edited(.editedAttributes, range: fullRange, changeInLength: 0)
+        endEditing()
     }
 
     override var string: String {
@@ -274,23 +356,26 @@ final class MarkdownTextStorage: NSTextStorage {
     }
 
     override func processEditing() {
-        applySyntaxHighlighting(forceFull: false)
+        if let highlighted = applySyntaxHighlighting() {
+            // Extend the edited range to the whole re-styled paragraph so the
+            // layout manager redraws text *before* the cursor too (e.g. typing
+            // the closing "*" of an italic span).
+            edited(.editedAttributes, range: highlighted, changeInLength: 0)
+        }
         super.processEditing()
     }
 
-    private func applySyntaxHighlighting(forceFull: Bool = false) {
+    /// Re-styles the paragraph(s) touched by the current edit and returns that range.
+    private func applySyntaxHighlighting() -> NSRange? {
         let nsString = backingStore.string as NSString
         let totalLength = nsString.length
-        guard totalLength > 0 else { return }
-
-        let targetRange: NSRange
-        if !forceFull && editedRange.location != NSNotFound && editedRange.location <= totalLength {
-            let safeLocation = min(editedRange.location, max(0, totalLength - 1))
-            let safeLength = min(editedRange.length, totalLength - safeLocation)
-            targetRange = nsString.paragraphRange(for: NSRange(location: safeLocation, length: safeLength))
-        } else {
-            targetRange = NSRange(location: 0, length: totalLength)
+        guard totalLength > 0, editedRange.location != NSNotFound, editedRange.location <= totalLength else {
+            return nil
         }
+
+        let safeLocation = min(editedRange.location, totalLength - 1)
+        let safeLength = min(editedRange.length, totalLength - safeLocation)
+        let targetRange = nsString.paragraphRange(for: NSRange(location: safeLocation, length: safeLength))
 
         let textColor = currentAppearance.nsTextColor
         let linkColor = currentAppearance == .sepia ? NSColor(red: 0.72, green: 0.35, blue: 0.12, alpha: 1.0) : NSColor.linkColor
@@ -346,5 +431,7 @@ final class MarkdownTextStorage: NSTextStorage {
             backingStore.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: titleRange)
             backingStore.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: urlRange)
         }
+
+        return targetRange
     }
 }

@@ -1,226 +1,249 @@
 # MDView User Guide
 
-Welcome to the comprehensive user guide for **MDView**, a lightweight, high-performance native macOS Markdown reader and editor. This guide covers daily workflows, workspace modes, tab and window management, local file navigation, and customization options.
+This guide covers everyday use of **MDView**, a lightweight native macOS Markdown reader and editor: workspace modes, tabs and windows, links, session restore, the outline, and customization.
 
 ---
 
 ## 📖 Table of Contents
 
 1. [Workspace Modes](#1-workspace-modes)
-   - [Viewer Mode (⌘1)](#viewer-mode-1)
-   - [Split Mode (⌘2)](#split-mode-2)
-   - [Editor Mode (⌘3)](#editor-mode-3)
-2. [File Ingestion & Navigation](#2-file-ingestion--navigation)
-   - [Opening Files via Finder](#opening-files-via-finder)
-   - [Open File Dialog (⌘O)](#open-file-dialog-o)
-   - [Drag-and-Drop Ingestion](#drag-and-drop-ingestion)
-   - [Smart Relative Link Resolution](#smart-relative-link-resolution)
-   - [Intra-Document Anchors & Headings](#intra-document-anchors--headings)
-3. [Safari-Style Tab & Window Management](#3-safari-style-tab--window-management)
-   - [Pill Tab Bar Overview](#pill-tab-bar-overview)
-   - [Tab Creation and Closing](#tab-creation-and-closing)
-   - [Tab Navigation & Shortcuts](#tab-navigation--shortcuts)
-   - [Unsaved Changes Indicators](#unsaved-changes-indicators)
-   - [Multi-Window Workspaces (⌘N)](#multi-window-workspaces-n)
-4. [Table of Contents Sidebar](#4-table-of-contents-sidebar)
-5. [Real-Time Document Telemetry](#5-real-time-document-telemetry)
-6. [Typography Zoom & Scaling](#6-typography-zoom--scaling)
-7. [Themes & Appearance Modes](#7-themes--appearance-modes)
-8. [Printing & Exporting to PDF](#8-printing--exporting-to-pdf)
+2. [Opening Files & Following Links](#2-opening-files--following-links)
+3. [Tabs & Windows](#3-tabs--windows)
+4. [Saving, Unsaved Changes & Session Restore](#4-saving-unsaved-changes--session-restore)
+5. [Outline Sidebar](#5-outline-sidebar)
+6. [Status Bar Statistics](#6-status-bar-statistics)
+7. [Zoom](#7-zoom)
+8. [Themes & Appearance](#8-themes--appearance)
+9. [Printing & Exporting to PDF](#9-printing--exporting-to-pdf)
+10. [Settings Reference](#10-settings-reference)
 
 ---
 
 ## 1. Workspace Modes
 
-MDView is designed around a **Tri-Modal Workspace** that lets you adapt the interface to whether you are reading, authoring, or editing code documentation. Switch between modes instantly using the segmented toolbar control or dedicated shortcuts:
+Each tab remembers its own mode. Switch with the segmented control in the toolbar or with the shortcuts below.
 
 ```
-┌────────────────────────────────────────────────────────┐
-│  [  Viewer (⌘1)  ]  |  [  Split (⌘2)  ]  |  [  Editor (⌘3)  ]  │
-└────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│   [ Viewer  ⌘1 ]   │   [ Split  ⌘2 ]   │   [ Editor  ⌘3 ]    │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-### Viewer Mode (`⌘1`)
+### Viewer (`⌘1`)
 
-**Ideal for**: Reading documentation, reviewing proposals, checking README files, and distraction-free reference.
+For reading documentation, READMEs and notes.
 
-- **Human Interface Guidelines Styling**: Renders Markdown with native macOS typography, proportional headings, legible body text, and styled code blocks.
-- **GitHub Flavored Markdown (GFM)**: Supports tables, task lists (`- [x]`), blockquotes, strikethrough (`~~text~~`), nested bullet lists, and fenced code blocks.
-- **Local Asset Loading**: Resolves and renders local relative image paths (e.g. `![Diagram](assets/diagram.png)`) directly against the document's directory.
-- **Interactive Links**: External web links open in Safari; local Markdown links open as new tabs within MDView.
-- **Selectable & Searchable**: Native AppKit text rendering allows you to select, copy, and search formatted text effortlessly.
+- **GitHub Flavored Markdown** — tables, task lists (`- [x]`), strikethrough (`~~text~~`), blockquotes, nested lists and fenced code blocks.
+- **Local images** — relative image paths such as `![Diagram](assets/diagram.png)` are resolved against the document's folder and shown at their natural size (shrunk to fit). A missing image shows a small placeholder with its file name.
+- **Selectable text** — rendered text can be selected and copied.
+- **Large documents** — the document is split at headings and rendered lazily, section by section.
 
-### Split Mode (`⌘2`)
+### Split (`⌘2`)
 
-**Ideal for**: Authoring articles, taking structured notes, and writing technical documentation with continuous visual feedback.
+Source editor on the left, live preview on the right. The preview updates as you type; the divider can be dragged.
 
-- **Synchronized Work Area**: Places the high-performance AppKit source editor on the left and the live rendered Markdown preview on the right.
-- **Real-Time Render Pipeline**: As you type on the left, the preview updates dynamically.
-- **Debounced Background Sync**: Parsing and outline updates run asynchronously off the main thread, maintaining fluid 120 FPS cursor movement and zero typing latency.
+### Editor (`⌘3`)
 
-### Editor Mode (`⌘3`)
+A monospaced AppKit `NSTextView` with Markdown syntax highlighting (headings, bold, italic, inline code, links). Only the paragraph you are editing is re-highlighted, so typing stays responsive in long files.
 
-**Ideal for**: High-speed drafting, code block formatting, large document edits, and raw Markdown manipulation.
+**Editing shortcuts** (active while the editor has keyboard focus):
 
-- **Monospaced Native Buffer**: Powered by a custom AppKit `NSTextView` configured with system monospaced typography.
-- **$O(1)$ Paragraph-Bounded Syntax Highlighting**: Unlike web-based editors that re-parse the entire document upon every keystroke, MDView highlights only the paragraph currently being modified. Large documents (5,000–10,000+ lines) edit with zero lag.
-- **Formatting Accelerators**:
-  - <kbd>⌘</kbd> <kbd>B</kbd>: Wrap selected text in bold (`**selection**`) or insert `****` at cursor.
-  - <kbd>⌘</kbd> <kbd>I</kbd>: Wrap selected text in italics (`*selection*`) or insert `**` at cursor.
-  - <kbd>⌘</kbd> <kbd>K</kbd>: Convert selection into a Markdown link (`[selection](url)`) and auto-select `url` for typing.
+| Shortcut | Effect |
+| :--- | :--- |
+| <kbd>⌘</kbd> <kbd>B</kbd> | Wraps the selection in `**…**`, or inserts `****` with the cursor in the middle |
+| <kbd>⌘</kbd> <kbd>I</kbd> | Wraps the selection in `*…*`, or inserts `**` with the cursor in the middle |
+| <kbd>⌘</kbd> <kbd>K</kbd> | Turns the selection into `[selection](url)` with `url` selected, ready to type over |
+| <kbd>⌘</kbd> <kbd>F</kbd> | Opens the Find bar (<kbd>⌘</kbd> <kbd>G</kbd> / <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>G</kbd> for next / previous, Replace is available from the bar) |
+| <kbd>⌘</kbd> <kbd>Z</kbd> | Undo — formatting shortcuts are fully undoable |
+
+Smart quotes, smart dashes and autocorrect are disabled so Markdown syntax is never rewritten behind your back.
 
 ---
 
-## 2. File Ingestion & Navigation
+## 2. Opening Files & Following Links
 
-MDView provides seamless integration with the macOS filesystem.
+### From Finder
 
-### Opening Files via Finder
+When MDView is installed as an app bundle (see the README's *Build a real `.app` bundle*), it registers for `.md`, `.markdown`, `.mdown`, `.mkdn` and plain-text files:
 
-- **Default Application**: Configure MDView as the default handler for `.md`, `.markdown`, `.mdown`, and `.txt` files in macOS Finder (*Right-click file* → *Get Info* → *Open with: MDView* → *Change All*).
-- **Double-Clicking in Finder**: Double-clicking any supported file opens it as a tab in your frontmost active MDView window. If no window is open, a new window launches automatically.
-- **Dock Icon Drop**: Dragging files onto the MDView Dock icon queues them to open in the key window.
+- **Set as default** — *right-click a file* → **Get Info** → **Open with: MDView** → **Change All…**
+- **Double-click** a file to open it as a tab in the frontmost MDView window (a new window is created if none is open). If that window only holds an empty *Untitled* tab, the file replaces it.
+- **Drop files on the Dock icon** to open them the same way.
 
-### Open File Dialog (`⌘O`)
+### Open dialog (`⌘O`)
 
-Press <kbd>⌘</kbd> <kbd>O</kbd> at any time to present the native macOS file picker modal sheet.
-- **Multi-Selection**: Hold <kbd>Shift</kbd> or <kbd>⌘</kbd> to select multiple `.md` files at once. All selected files open simultaneously as distinct tabs in the current window.
-- **Content Filtering**: Filters automatically to supported plain text and Markdown document types.
+Shows the standard open panel as a sheet. Select several files with <kbd>⇧</kbd> or <kbd>⌘</kbd> to open them all as tabs. A file that is already open is focused instead of being opened twice.
 
-### Drag-and-Drop Ingestion
+### Drag and drop
 
-MDView supports macOS drag-and-drop gestures:
-1. **Drag from Finder into Tab Bar**: Drag one or more Markdown files directly from Finder onto the Safari tab bar to append them as new tabs.
-2. **Drag from Finder into Editor**: Dragging image files into the raw editor inserts corresponding relative Markdown image references.
+- **Onto a window** — drop Markdown or text files from Finder anywhere on the tab bar or the preview to open them as tabs.
+- **Onto the editor** — dropping Markdown files opens them as tabs; dropping **images** inserts a reference at the drop point, using a path relative to the document when possible:
 
-### Smart Relative Link Resolution
+  ```markdown
+  ![diagram](assets/diagram.png)
+  ```
 
-A common frustration with Markdown viewers is broken local links when navigating multi-file documentation sets (such as wikis, Git repositories, or project docs). MDView solves this natively:
+  Spaces and other special characters in the path are percent-encoded so the link stays valid.
 
-1. **Automatic Directory Context**: When viewing a document located at `/Projects/Docs/index.md`, MDView establishes `/Projects/Docs/` as the document's base URL.
-2. **Relative File Paths**: Clicking a relative link such as:
-   ```markdown
-   [Developer Guide](./ARCHITECTURE.md)
-   [Contributing Guidelines](../CONTRIBUTING.md)
-   [Changelog](CHANGELOG)
-   ```
-   automatically resolves the path relative to the active document.
-3. **In-App Tab Opening**: If the target is a Markdown file, MDView opens it directly as a new tab in the active window.
-4. **Duplicate Tab Reuse**: If the target document is already open in another tab in the window, MDView focuses that tab rather than creating a duplicate.
-5. **Non-Markdown Files**: If the target link points to an external file (e.g. `spec.pdf` or `dataset.csv`), MDView delegates opening to the system via `NSWorkspace`.
-6. **External Web URLs**: Links beginning with `http://` or `https://` hand off directly to your default macOS browser (e.g., Safari).
+### Relative links between documents
 
-### Intra-Document Anchors & Headings
+Links are resolved relative to the folder of the current document:
 
-When a document links to an internal section using a heading hash anchor:
 ```markdown
-[Jump to Architecture](#architecture-overview)
-```
-MDView intercepts the click, locates the matching heading in the parsed document tree, and animates a smooth scroll directly to that section in the viewport.
-
----
-
-## 3. Safari-Style Tab & Window Management
-
-MDView features a custom pill-shaped tab bar modeled after the modern macOS Safari design.
-
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│ (  📄 README.md  )  (  📄 ARCHITECTURE.md •  )  (  📄 USAGE.md [×]  )  [+]│
-└────────────────────────────────────────────────────────────────────────┘
+[Developer Guide](./ARCHITECTURE.md)
+[Contributing](../CONTRIBUTING.md)
+[Changelog](CHANGELOG)        <!-- no extension: CHANGELOG.md is tried first -->
 ```
 
-### Pill Tab Bar Overview
+| Link target | What happens |
+| :--- | :--- |
+| Markdown file (`.md`, `.markdown`, `.mdown`, `.mkdn`, `.mkd`) | Opens as a tab in the current window, or focuses it if already open |
+| Other local file or folder (`.pdf`, `.png`, `.csv`, …) | Opens in its default app (folders open in Finder) |
+| `http`, `https`, `mailto`, `tel` and other URL schemes | Handed to macOS (your default browser, mail client, …) |
+| Missing file | An alert shows the full path that was looked up |
 
-- **Active Tab Pill**: The focused document is styled as an elevated white/translucent capsule with a subtle border and shadow, clearly distinguishing it from background tabs.
-- **Document Icon & Truncation**: Displays the native document icon and file title, cleanly truncating long titles with an ellipsis.
-- **Hover Reveal**: Close buttons (<kbd>×</kbd>) remain hidden on inactive tabs until you hover over them, keeping the interface uncluttered.
+> Relative links need a saved document — in an *Untitled* tab there is no folder to resolve against, and MDView tells you so.
 
-### Tab Creation and Closing
+### Anchors inside a document
 
-- **New Blank Tab**: Click the **`+`** button at the right edge of the tab strip or press <kbd>⌘</kbd> <kbd>T</kbd>.
-- **Close Active Tab**: Press <kbd>⌘</kbd> <kbd>W</kbd>.
-- **Close Specific Tab**: Hover over any tab pill and click the <kbd>×</kbd> button.
-- **Middle-Click Closure**: If you use a mouse with a clickable scroll wheel or trackpad three-finger click simulation, clicking any tab pill with the **middle mouse button** closes that tab immediately.
-- **Last Tab Behavior**: Closing the final remaining tab in a window automatically closes the host window.
-
-### Tab Navigation & Shortcuts
-
-Cycle through your open documents without touching the mouse:
-- **Next Tab**: Press <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>]</kbd>
-- **Previous Tab**: Press <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>[</kbd>
-
-Navigation wraps around seamlessly from the last tab to the first.
-
-### Unsaved Changes Indicators
-
-When you modify a document, MDView displays a subtle circular dot indicator inside the tab pill:
-- The dot persists until you save the document (<kbd>⌘</kbd> <kbd>S</kbd>).
-- If you attempt to close an unsaved tab or window, MDView prompts you to save your changes or discard them.
-
-### Multi-Window Workspaces (`⌘N`)
-
-MDView supports an independent multi-window architecture:
-- Press <kbd>⌘</kbd> <kbd>N</kbd> to spawn a completely separate window instance.
-- Each window manages its own independent array of tabs and selected document state.
-- Keyboard shortcuts and menu operations automatically target the frontmost (key) window.
-
----
-
-## 4. Table of Contents Sidebar
-
-Click the sidebar toggle button in the toolbar (<kbd>sidebar.left</kbd>) to reveal the **Document Outline**:
-
-- **Hierarchical Outline**: Automatically extracts `# H1`, `## H2`, `### H3`, `#### H4`, `##### H5`, and `###### H6` headings in real time.
-- **Visual Indentation**: Subheadings are indented proportionally to their depth level.
-- **Jump Navigation**: Click any entry in the outline to instantly jump to that heading in either Viewer or Editor mode.
-- **Selection Highlight**: The sidebar highlights the heading corresponding to your current reading position.
-
----
-
-## 5. Real-Time Document Telemetry
-
-Located at the bottom of each tab, the subtle status bar provides live document statistics:
-
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│  3,420 words  ·  21,480 characters  ·  ~14 min read                    │
-└────────────────────────────────────────────────────────────────────────┘
+```markdown
+[Jump to the overview](#architecture-overview)
 ```
 
-- **Word Count**: Accurately counts whitespace-delimited words while excluding raw markdown markup tokens.
-- **Character Count**: Full unicode-compliant character count.
-- **Reading Time**: Calculated assuming an average adult reading speed of 225 words per minute.
-- **Performance Guarantee**: Telemetry calculations are debounced by 120ms and processed via asynchronous background tasks, ensuring that rapid typing remains buttery smooth at 120Hz.
+Clicking an anchor scrolls the preview to the matching heading. Anchors follow GitHub's rules: lowercase, punctuation and emoji removed, spaces become `-` — so `## 3. Tab & Window` is `#3-tab--window`. Repeated headings get `-1`, `-2`, … suffixes, exactly like on GitHub.
 
 ---
 
-## 6. Typography Zoom & Scaling
+## 3. Tabs & Windows
 
-MDView allows you to scale the entire reading and editing typography dynamically:
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│ ( 📄 README  ×)  ( 📄 ARCHITECTURE • )  ( 📄 USAGE )                  [+] │
+└──────────────────────────────────────────────────────────────────────────┘
+```
 
-- **Zoom In**: Press <kbd>⌘</kbd> <kbd>+</kbd> (or <kbd>⌘</kbd> <kbd>=</kbd>) to increase font size in 10% increments.
-- **Zoom Out**: Press <kbd>⌘</kbd> <kbd>-</kbd> to decrease font size in 10% increments.
-- **Actual Size**: Press <kbd>⌘</kbd> <kbd>0</kbd> to reset zoom back to 100%.
+- **Active tab** — raised pill with a border and soft shadow.
+- **Titles** — the file name without its extension; hover a tab to see the full path.
+- **Close buttons** — visible on the active tab and on the tab under the pointer.
+- **Unsaved dot** — a small dot marks tabs with unsaved changes.
 
-Zoom scales proportional sizing across headings, body text, monospaced code blocks, and the AppKit source editor simultaneously.
+### Creating and closing tabs
+
+| Action | How |
+| :--- | :--- |
+| New blank tab | **+** button or <kbd>⌘</kbd> <kbd>T</kbd> |
+| Close active tab | <kbd>⌘</kbd> <kbd>W</kbd> |
+| Close a specific tab | Its **×** button, or click it with the **middle mouse button** |
+| Close all other tabs | Right-click a tab → **Close Other Tabs** |
+| Reveal file / copy its path | Right-click a tab → **Reveal in Finder** / **Copy Path** |
+
+Closing the last tab of a window closes the window. Closing the last tab of the **whole app** quits MDView and clears the saved session, so the next launch starts fresh.
+
+### Switching tabs
+
+- Next tab: <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>]</kbd>
+- Previous tab: <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>[</kbd>
+
+Navigation wraps around from the last tab to the first.
+
+### Multiple windows (`⌘N`)
+
+Every window has its own set of tabs. Menu commands and shortcuts always act on the frontmost window; files opened from Finder go to the window you used last.
 
 ---
 
-## 7. Themes & Appearance Modes
+## 4. Saving, Unsaved Changes & Session Restore
 
-MDView includes four carefully balanced visual themes to accommodate any lighting condition. Access them from the toolbar appearance menu or the Preferences panel (<kbd>⌘</kbd> <kbd>,</kbd>):
+### Saving
 
-1. **System (Default)**: Automatically follows your macOS System Appearance, switching dynamically when macOS transitions between Light and Dark mode.
-2. **Light**: Crisp, high-contrast white background with deep charcoal typography, ideal for bright office environments.
-3. **Dark**: Deep slate/charcoal background with soft white text, minimizing eye strain during nighttime writing sessions.
-4. **Sepia**: Warm, low-contrast parchment palette inspired by classic e-readers, designed for extended reading sessions.
+- <kbd>⌘</kbd> <kbd>S</kbd> writes the file in place (UTF-8). For an *Untitled* tab it behaves like **Save As…**.
+- <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>S</kbd> saves a copy under a new name; the tab then points to the new file.
+
+Files in other encodings (UTF-16, Latin-1, …) are opened correctly and saved back as UTF-8. If a file cannot be read at all, **Save** always asks for a new location so the original is never overwritten with an empty document.
+
+### When you close or quit with unsaved changes
+
+- **Closing a tab** asks *Save*, *Cancel* or *Don't Save*. Choosing *Save* on an *Untitled* tab shows the save panel and closes the tab once the file is written.
+- **Closing a window** (red button or <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>W</kbd>) asks the same question for that window's unsaved tabs (**Save All**, **Cancel**, **Discard Changes** when there are several).
+- **Quitting** (<kbd>⌘</kbd> <kbd>Q</kbd>) does the same for every window.
+
+Untitled drafts are not counted on quit (or when closing the last window) while session restore is on, because they are kept in the session.
+
+### Session restore
+
+With **Settings → Startup → Restore windows and tabs on reopen** enabled (the default), MDView remembers:
+
+- every open window and its tabs, in order, and which tab was selected;
+- each tab's mode (Viewer / Split / Editor);
+- the full text of **Untitled drafts**, so they survive quitting — they are still marked as unsaved and will ask before being closed.
+
+Files that were moved or deleted since the last launch are skipped. Turning the setting off deletes the stored session immediately. The session lives in `~/Library/Application Support/MDView/session.json`.
 
 ---
 
-## 8. Printing & Exporting to PDF
+## 5. Outline Sidebar
 
-MDView provides print and vector PDF export engines that output clean, publication-ready documents:
+Toggle it with the sidebar button at the left of the toolbar; its visibility is remembered across tabs and launches.
 
-- **Print (<kbd>⌘</kbd> <kbd>P</kbd>)**: Opens the standard macOS print dialog with full support for printer selection, layout orientation, page ranges, and headers/footers.
-- **Export as PDF (<kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>E</kbd>)**: Generates a high-resolution, vector-based PDF file directly to your chosen disk location. Hyperlinks and headings are preserved in the generated PDF.
+- Lists `#` through `######` headings, indented by level. Lines inside fenced code blocks (for example `# install` in a shell snippet) are ignored.
+- Click an entry to jump there — the preview scrolls to the section, and in Split / Editor mode the cursor moves to the heading line.
+- The line number of each heading is shown on the right; hover an entry to see a long title in full.
+
+---
+
+## 6. Status Bar Statistics
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│  3,420 words   21,480 characters   512 lines                 ⏱ 18 min read │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+- **Words** — whitespace-separated tokens (Markdown symbols such as `#` or `-` count when they stand alone).
+- **Characters** — user-perceived characters (an emoji counts as one).
+- **Lines** — line breaks + 1.
+- **Reading time** — words ÷ 200 words per minute, rounded up.
+
+Statistics are recomputed 120 ms after you stop typing, on a background thread, so they never slow down editing.
+
+---
+
+## 7. Zoom
+
+| Shortcut | Effect |
+| :--- | :--- |
+| <kbd>⌘</kbd> <kbd>+</kbd> or <kbd>⌘</kbd> <kbd>=</kbd> | Zoom in by 10 % |
+| <kbd>⌘</kbd> <kbd>-</kbd> | Zoom out by 10 % |
+| <kbd>⌘</kbd> <kbd>0</kbd> | Back to 100 % |
+
+The range is **70 %–250 %**. Zoom applies to both the preview and the editor and is shared by all windows; the default can also be set with the slider in Settings.
+
+---
+
+## 8. Themes & Appearance
+
+Choose from the toolbar's appearance menu or in Settings (<kbd>⌘</kbd> <kbd>,</kbd>):
+
+1. **System** (default) — follows macOS Light/Dark mode automatically.
+2. **Light** — always light.
+3. **Dark** — always dark.
+4. **Sepia** — warm paper background with brown ink, for long reading sessions.
+
+---
+
+## 9. Printing & Exporting to PDF
+
+- **Print** (<kbd>⌘</kbd> <kbd>P</kbd>) — opens the standard print dialog (printer, page range, copies). Output uses the current zoom level.
+- **Export as PDF** (<kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>E</kbd>) — asks for a location and writes a vector PDF at 100 % scale; text stays selectable and searchable.
+
+Both use your default paper size with 48 pt margins and always render dark text on white paper, whatever theme the app is using. Code blocks wrap instead of scrolling, and local images and tables are included.
+
+---
+
+## 10. Settings Reference
+
+| Setting | Default | Effect |
+| :--- | :--- | :--- |
+| Restore windows and tabs on reopen | On | See [Session restore](#session-restore) |
+| Appearance | System | Theme for every window |
+| Default Zoom | 100 % | Same value as the View ▸ Zoom commands |

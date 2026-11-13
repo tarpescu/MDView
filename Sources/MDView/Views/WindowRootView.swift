@@ -11,9 +11,14 @@ import AppKit
 
 struct WindowRootView: View {
     let windowID: UUID?
-    @StateObject private var windowState = WindowState()
+    @StateObject private var windowState: WindowState
     @Environment(\.controlActiveState) private var controlActiveState
     @Environment(\.openWindow) private var openWindow
+
+    init(windowID: UUID?) {
+        self.windowID = windowID
+        _windowState = StateObject(wrappedValue: WindowState(id: windowID ?? UUID()))
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -27,11 +32,32 @@ struct WindowRootView: View {
             }
         }
         .frame(minWidth: 720, minHeight: 480)
+        // Ask about unsaved tabs before the window itself closes.
+        .background(WindowCloseInterceptor {
+            UnsavedChanges.resolve(
+                WindowManager.shared.tabsAtRisk(onClosing: windowState),
+                whileDoing: "closing this window"
+            )
+        })
+        // Markdown/text files dragged from Finder onto the window open as tabs.
+        // (The editor handles its own drops, see MarkdownTextView.)
+        .dropDestination(for: URL.self) { urls, _ in
+            let files = urls.filter { $0.isFileURL && MarkdownFile.isOpenable($0) }
+            for url in files { windowState.openTab(url: url) }
+            return !files.isEmpty
+        }
         .onAppear {
-            WindowManager.shared.activeWindowState = windowState
+            WindowManager.shared.registerWindow(windowState)
+            // At cold launch, Finder's open event can arrive after this window's
+            // state was created but before it appeared.
+            WindowManager.shared.drainPendingURLs(into: windowState)
             WindowManager.shared.openNewWindowAction = {
                 openWindow(value: UUID())
             }
+            WindowManager.shared.restoreAdditionalWindows(using: openWindow)
+        }
+        .onDisappear {
+            WindowManager.shared.unregisterWindow(windowState)
         }
         .onChange(of: controlActiveState) { _, newState in
             if newState == .key {

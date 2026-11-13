@@ -1,67 +1,59 @@
 # MDView Architecture & Developer Guide
 
-This document outlines the technical architecture, design philosophy, state management models, and internal rendering pipelines of **MDView**. It is written for macOS engineers, contributors, and systems architects interested in high-performance desktop software development.
+This document describes the technical architecture, state management and rendering pipelines of **MDView**. It is written for contributors and macOS engineers.
 
 ---
 
 ## 🏛 Table of Contents
 
-1. [Architectural Philosophy: Native vs. Electron](#1-architectural-philosophy-native-vs-electron)
+1. [Design Philosophy](#1-design-philosophy)
 2. [Component Architecture & UI Hierarchy](#2-component-architecture--ui-hierarchy)
 3. [Tab & Window State Management](#3-tab--window-state-management)
-   - [The Decoupled Multi-Window Model](#the-decoupled-multi-window-model)
+   - [The Multi-Window Model](#the-multi-window-model)
    - [WindowManager & Active Window Routing](#windowmanager--active-window-routing)
    - [Notification-Driven Command Dispatch](#notification-driven-command-dispatch)
-4. [Smart Link Interception & Path Resolution](#4-smart-link-interception--path-resolution)
-   - [The OpenURLAction Interceptor Pipeline](#the-openurlaction-interceptor-pipeline)
-   - [Relative Path Resolution Logic](#relative-path-resolution-logic)
-   - [Anchor Scrolling via Viewport Proxy](#anchor-scrolling-via-viewport-proxy)
-5. [High-Performance AppKit Editor Integration](#5-high-performance-appkit-editor-integration)
-   - [Why SwiftUI TextEditor Falls Short](#why-swiftui-texteditor-falls-short)
-   - [The AppKit Bridge Architecture](#the-appkit-bridge-architecture)
-   - [The $O(1)$ Paragraph-Bounded Highlighting Engine](#the-o1-paragraph-bounded-highlighting-engine)
-   - [Event Interception in MarkdownTextView](#event-interception-in-markdowntextview)
-6. [Asynchronous Document Telemetry Pipeline](#6-asynchronous-document-telemetry-pipeline)
-7. [Memory, Concurrency, and Performance Profile](#7-memory-concurrency-and-performance-profile)
+   - [Session Persistence & Restoration](#session-persistence--restoration)
+   - [Unsaved Changes](#unsaved-changes)
+4. [Link Interception & Path Resolution](#4-link-interception--path-resolution)
+5. [AppKit Editor Integration](#5-appkit-editor-integration)
+6. [Headings, Outline & Lazy Rendering](#6-headings-outline--lazy-rendering)
+7. [Asynchronous Statistics](#7-asynchronous-statistics)
+8. [Printing & PDF Export](#8-printing--pdf-export)
+9. [Building & Tooling](#9-building--tooling)
+10. [Extension Guidelines](#10-extension-guidelines)
 
 ---
 
-## 1. Architectural Philosophy: Native vs. Electron
+## 1. Design Philosophy
 
-Many modern text and Markdown editors are built upon Chromium/Node runtimes (Electron). While Electron accelerates cross-platform deployment, it introduces heavy penalties on macOS:
+Many Markdown editors are built on Electron and ship a full Chromium + Node.js runtime. MDView is instead a single native process:
 
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│                        RESOURCE UTILIZATION PROFILE                    │
-├───────────────────────┬──────────────────────┬─────────────────────────┤
-│ Metric                │ Typical Electron App │ MDView (Swift/AppKit)   │
-├───────────────────────┼──────────────────────┼─────────────────────────┤
-│ Cold Launch Time      │ 1,200ms – 2,500ms    │ 60ms – 90ms             │
-│ Idle Memory (RSS)     │ 450 MB – 1.2 GB      │ ~28 MB – 36 MB          │
-│ Running Processes     │ 4 to 8 processes     │ 1 single native process │
-│ Render Engine         │ Blink (Web Engine)   │ CoreGraphics + AppKit   │
-│ Battery Impact        │ High (V8 JIT + IPC)  │ Negligible (Idle timer) │
-│ Scroll FPS (ProMotion)│ Variable (60-90 FPS) │ Constant 120 FPS        │
-└───────────────────────┴──────────────────────┴─────────────────────────┘
-```
+| Aspect | Typical Electron editor | MDView |
+| :--- | :--- | :--- |
+| Processes | Main + renderer + GPU/utility helpers | One native process |
+| Rendering | Blink web engine | SwiftUI / AppKit / Core Text |
+| Text editing | JavaScript editor component | `NSTextView` + custom `NSTextStorage` |
+| Platform integration | Re-implemented in JS | Native menus, Find bar, accessibility, Services, appearance |
 
-### Why MDView Chose Swift 6 + SwiftUI + AppKit
+**Why Swift 6 + SwiftUI + AppKit**
 
-1. **Deterministic Memory Footprint**: MDView allocates standard Cocoa objects (`NSView`, `NSTextStorage`, `NSAttributedString`). A clean window with three open tabs operates within ~30MB of Resident Set Size (RSS), eliminating memory pressure on machines with unified memory architectures.
-2. **Instant Process Liftoff**: With no Node.js runtime initialization, no V8 engine bootstrap, and no inter-process communication (IPC) handshakes, MDView renders its first frame within milliseconds of launch.
-3. **Deep macOS HIG Alignment**: By utilizing native AppKit controls, MDView automatically inherits system accent colors, macOS window vibrancy, standard text-editing responder chains, accessibility trees (VoiceOver), and system typography.
+1. **Small footprint** — standard Cocoa objects instead of a browser engine; no JIT, no IPC.
+2. **Fast startup** — no runtime to bootstrap before the first frame.
+3. **Platform behaviour for free** — accent colours, Dark Mode, the responder chain, VoiceOver, the system Find bar and text services come with the native controls.
+4. **Strict concurrency** — the package builds in Swift 6 language mode; all UI state is `@MainActor`-isolated and background work is limited to `Sendable` values.
 
 ---
 
 ## 2. Component Architecture & UI Hierarchy
 
-MDView uses a hybrid design: **SwiftUI** handles declarative window layouts, reactive bindings, and toolbar controls, while **AppKit** powers low-latency text storage, keyboard event equivalents, and modal sheets.
+SwiftUI handles windows, layout, bindings and toolbars; AppKit powers the text editor, panels, alerts and printing.
 
 ```mermaid
 flowchart TD
     subgraph Application Entry
         App[MDViewApp: @main] --> Delegate[AppDelegate: NSApplicationDelegate]
         App --> WG[WindowGroup for: UUID.self]
+        App --> Settings[Settings scene]
     end
 
     subgraph Window Hierarchy
@@ -70,10 +62,11 @@ flowchart TD
         WRV --> CV[ContentView]
     end
 
-    subgraph Global Event Routing
+    subgraph Global Routing & Session
         Delegate --> WM[WindowManager.shared]
-        WM -.->|Routes File URLs| WS[WindowState: ObservableObject]
-        WRV -.->|Tracks Focus State| WM
+        WM -.->|routes file URLs| WS[WindowState: ObservableObject]
+        WRV -.->|register / key window| WM
+        WM -.->|session.json| Disk[(Application Support)]
     end
 
     subgraph Active Tab Presentation
@@ -89,91 +82,142 @@ flowchart TD
         LM --> MTS[MarkdownTextStorage: NSTextStorage]
     end
 
-    WS -->|Owns collection| TI[TabItem: ObservableObject]
-    CV -->|Binds to active| TI
+    WS -->|owns| TI[TabItem: ObservableObject]
+    CV -->|binds to active| TI
 ```
+
+### Source map
+
+| File | Responsibility |
+| :--- | :--- |
+| `MDViewApp.swift` | `@main` app, `AppDelegate` (Finder open, reopen, quit guard), menu commands |
+| `Models/WindowState.swift` | `WindowManager` (routing, session), `WindowState` (tabs of one window), `DefaultsKey` |
+| `Models/TabItem.swift` | One open document: text, file URL, dirty flag, per-tab view state, save logic |
+| `Models/MarkdownFile.swift` | Supported extensions/UTTypes and tolerant (multi-encoding) file reading |
+| `Models/MarkdownHeading.swift` | Heading parser, GitHub slugs, section splitting for lazy rendering |
+| `Models/DocumentStatistics.swift` | Background word/character/line counting |
+| `Models/PrintHelpers.swift` | `MarkdownPrinter` — paginated PDF rendering, print and PDF export |
+| `Views/LocalImageProviders.swift` | MarkdownUI image providers that load `file://` images |
+| `Views/WindowCloseInterceptor.swift` | Window delegate proxy that asks before closing a window with unsaved tabs |
+| `Models/AppAppearance.swift` | Themes and `FontScale` zoom limits |
+| `Views/NativeMarkdownEditorView.swift` | `NSViewRepresentable` editor, `MarkdownTextView`, `MarkdownTextStorage` |
+| `Views/MarkdownPreviewView.swift` | Rendered preview, link interceptor, `Theme.nativeMac` |
+| `Views/*` (others) | Window root, tab bar, content, outline, status bar, settings |
 
 ---
 
 ## 3. Tab & Window State Management
 
-### The Decoupled Multi-Window Model
+### The Multi-Window Model
 
-In MDView, macOS windows are distinct architectural domains. Unlike document-based architectures where each window owns exactly one file URL, MDView supports multi-tab browsing within each window:
+Every window is an independent domain with its own tabs:
 
-- Each window is identified by a unique `UUID` managed by SwiftUI's `WindowGroup(for: UUID.self)`.
-- Inside `WindowRootView`, a `@StateObject private var windowState = WindowState()` instance is instantiated.
-- `WindowState` holds an array of `TabItem` models (`@Published var tabs: [TabItem]`) and tracks the currently focused tab (`@Published var selectedTabId: UUID?`).
+- Windows come from `WindowGroup(for: UUID.self)`; the UUID value identifies the window (and lets session restore re-open a specific window).
+- `WindowRootView` creates its state from that identifier:
 
-```swift
-@MainActor
-final class WindowState: ObservableObject, Identifiable {
-    let id: UUID
-    @Published var tabs: [TabItem] = []
-    @Published var selectedTabId: UUID?
-    
-    // Tab navigation, append, close, and cycle methods...
-}
-```
+  ```swift
+  init(windowID: UUID?) {
+      self.windowID = windowID
+      _windowState = StateObject(wrappedValue: WindowState(id: windowID ?? UUID()))
+  }
+  ```
+
+- `WindowState` holds `@Published var tabs: [TabItem]` and `@Published var selectedTabId: UUID?`.
+- Only the selected tab gets a `ContentView` (`.id(activeTab.id)`), so background tabs keep just their text and metadata — no text views, no layout caches.
 
 ### WindowManager & Active Window Routing
 
-When an external event occurs—such as a user double-clicking a file in Finder, dragging a file to the Dock, or choosing *File → Open* from the macOS menu bar—the application must route the target URL to the frontmost active window.
+External events — a Finder double-click, a Dock drop, **File ▸ Open** — must reach the window the user is working in.
 
-To achieve this without tight coupling:
-1. `WindowManager.shared` maintains a weak reference to the active `WindowState` (`activeWindowState`).
-2. `WindowRootView` observes `@Environment(\.controlActiveState)`. When a window becomes `.key`, it registers its local `WindowState` as the active manager in `WindowManager.shared`.
-3. If no window is currently visible, `WindowManager` queues incoming URLs into `pendingURLs` and triggers `openNewWindowAction?()`, ensuring zero dropped files during cold launches.
+1. Every `WindowRootView` registers its `WindowState` on appear and unregisters on disappear (`openWindows`).
+2. When a window becomes key (`controlActiveState == .key`) it becomes `WindowManager.shared.activeWindowState` (held **weakly**).
+3. If no window exists yet (cold launch from Finder), URLs are queued in `pendingURLs` and a window is requested via `openNewWindowAction`. The new `WindowState.init` drains the queue, so no file is dropped.
 
 ```swift
-@MainActor
-final class WindowManager {
-    static let shared = WindowManager()
-    var activeWindowState: WindowState?
-    var pendingURLs: [URL] = []
-    var openNewWindowAction: (() -> Void)?
-
-    func openURLsInActiveWindow(_ urls: [URL]) {
-        guard !urls.isEmpty else { return }
-        if let activeState = activeWindowState {
-            for url in urls {
-                activeState.openTab(url: url)
-            }
-        } else {
-            pendingURLs.append(contentsOf: urls)
-            openNewWindowAction?()
-        }
+func openURLsInActiveWindow(_ urls: [URL]) {
+    guard !urls.isEmpty else { return }
+    if let activeState = activeWindowState {
+        for url in urls { activeState.openTab(url: url) }
+    } else {
+        pendingURLs.append(contentsOf: urls)
+        openNewWindowAction?()
     }
 }
 ```
 
+`openTab(url:)` compares `standardizedFileURL`s, so a file that is already open is focused rather than duplicated.
+
 ### Notification-Driven Command Dispatch
 
-Menu commands in macOS are defined at the application scene level inside `MDViewApp.commands`. Because the menu bar lives outside the individual window view hierarchy, MDView utilizes a lightweight NotificationCenter command bus:
+Menu commands live at scene level (`MDViewApp.commands`), outside any window's view tree. They post notifications that every window observes; each window acts only if it is the key window:
 
 ```
-[ Menu Bar: Cmd+T ] ──> NotificationCenter (.createNewTab)
-                             │
-                             ▼
-                    [ Key WindowRootView ]
-                             │
-                             ▼
-                 [ windowState.addNewTab() ]
+[ Menu: ⌘T ] ──► NotificationCenter (.createNewTab)
+                        │
+                        ▼
+          [ WindowRootView where controlActiveState == .key ]
+                        │
+                        ▼
+              [ windowState.addNewTab() ]
 ```
 
-Each `WindowRootView` guards against inactive execution by verifying:
 ```swift
-guard controlActiveState == .key else { return }
+.onReceive(NotificationCenter.default.publisher(for: .createNewTab)) { _ in
+    guard controlActiveState == .key else { return }
+    windowState.addNewTab()
+}
 ```
-This ensures that menu commands only execute against the active, user-focused window.
+
+### Session Persistence & Restoration
+
+`WindowManager` saves the session whenever the tab structure changes (open, close, select, window register/unregister) and on `applicationWillTerminate`.
+
+**Format** — JSON at `~/Library/Application Support/MDView/session.json`:
+
+```swift
+struct SavedSessionState: Codable { var windows: [SavedWindowState] }
+struct SavedWindowState: Codable {
+    var id: UUID                     // matches the WindowGroup value
+    var tabs: [SavedTabState]
+    var selectedTabURLString: String?
+    var selectedIndex: Int
+}
+struct SavedTabState: Codable {
+    var fileURLString: String?       // file-backed tab…
+    var text: String?                // …or the full text of an Untitled draft
+    var viewMode: String
+    var selectedHeadingId: String?
+    var scrollToOffset: Int?
+}
+```
+
+Empty Untitled tabs are not stored; if nothing worth restoring remains, the file is deleted. Earlier builds stored the blob in `UserDefaults` (`saved_session_data`); it is migrated on first load and removed.
+
+**Restoration flow**
+
+1. The first `WindowState.init` calls `popSavedWindow(for:)`, which loads the session **once per launch** into `windowsToRestore` and hands out the entry whose `id` matches (or the first one).
+2. That window's `onAppear` calls `restoreAdditionalWindows(using: openWindow)`, which opens one window per remaining entry — `openWindow(value: savedWindow.id)` — exactly once.
+3. Each of those windows claims its own entry by id in its initializer.
+4. Once the queue is empty, later windows (`⌘N`) start blank. Loading only once matters: re-reading the file after launch would clone the *current* windows into every new window.
+
+Restored drafts are marked `isModified = true`, so closing them still asks before discarding text. Closing the very last tab in the app clears the session (the user explicitly emptied the workspace); closing the last *window* keeps it, Safari-style.
+
+### Unsaved Changes
+
+- `TabItem.text` has a `didSet` that sets `isModified` on any real change — typing, formatting shortcuts, drops — independent of which view is on screen.
+- `WindowState.closeTab(id:)` asks *Save / Cancel / Don't Save* (`askToSaveChanges(of:)`). `TabItem.save(completion:)` reports success asynchronously, so an Untitled tab closes only after its save panel finishes successfully.
+- `AppDelegate.applicationShouldTerminate` collects `WindowManager.tabsAtRiskOnQuit` (modified file-backed tabs, plus Untitled drafts when session restore is off) and offers *Save All / Cancel / Discard Changes*, using `TabItem.saveSynchronously()` because sheets cannot run during termination.
+- Closing a window: SwiftUI owns the `NSWindow` delegate, so `WindowCloseInterceptor` (a zero-size `NSViewRepresentable` in the window's background) installs a `WindowDelegateProxy` that implements `windowShouldClose(_:)` and forwards every other delegate message to SwiftUI's original delegate via `responds(to:)` / `forwardingTarget(for:)`. It asks about `WindowManager.tabsAtRisk(onClosing:)` through the same `UnsavedChanges.resolve` prompt used on quit.
+
+### Opening files from Finder
+
+`WindowGroup` is declared with `.handlesExternalEvents(matching: [])`. Without it, SwiftUI creates a **new window for every** Finder *Open With* / `open -a` / Dock-drop event, and the AppDelegate then opens the file into that fresh window. With the scene opted out, the events reach `AppDelegate.application(_:open:)` only, which routes them to the active window. At a cold launch the event can arrive before the first window has registered; the URLs wait in `pendingURLs` and the window drains them in `onAppear` (`drainPendingURLs(into:)`). A lone pristine *Untitled* tab is replaced by the opened file.
 
 ---
 
-## 4. Smart Link Interception & Path Resolution
+## 4. Link Interception & Path Resolution
 
-### The OpenURLAction Interceptor Pipeline
-
-MDView integrates the [`swift-markdown-ui`](https://github.com/gonzalezreal/swift-markdown-ui) rendering engine for Viewer and Split modes. In standard configurations, clicking any link in a rendered Markdown view opens default handlers. MDView replaces this default behavior using a custom SwiftUI `OpenURLAction` interceptor:
+The preview uses [`swift-markdown-ui`](https://github.com/gonzalezreal/swift-markdown-ui) with `baseURL` set to the document's folder, and replaces the default link behaviour with a SwiftUI `OpenURLAction`:
 
 ```swift
 .environment(\.openURL, OpenURLAction { url in
@@ -181,247 +225,198 @@ MDView integrates the [`swift-markdown-ui`](https://github.com/gonzalezreal/swif
 })
 ```
 
-`handleLinkClick(_:)` processes links through a three-stage triage engine:
+Because MarkdownUI resolves links against `baseURL`, a relative link such as `./GUIDE.md` arrives as an absolute `file://` URL, and an anchor `#setup` arrives as `file:///docs/#setup` (or bare `#setup` for an unsaved document). `handleLinkClick(_:)` triages them:
 
 ```mermaid
 flowchart TD
-    URL[Incoming Clicked URL] --> CheckScheme{Scheme Classification}
-    
-    CheckScheme -->|http / https / mailto / tel| Web[Return .systemAction<br>Delegate to Safari / Mail]
-    CheckScheme -->|Has # or starts with #| Anchor[Intra-Document Anchor Triage]
-    CheckScheme -->|file / relative path| Relative[Local File Resolver]
+    URL[Clicked URL] --> Scheme{Scheme?}
+    Scheme -->|any non-file scheme: http, https, mailto, tel…| System[.systemAction<br>macOS handles it]
+    Scheme -->|file or none| Anchor{Fragment AND points at<br>this document or its folder?}
 
-    Anchor --> MatchHeading{Matches Outline Heading?}
-    MatchHeading -->|Yes| Scroll[Set targetHeadingId<br>Trigger ScrollViewProxy.scrollTo<br>Return .handled]
-    MatchHeading -->|No| Ignored[Return .handled]
+    Anchor -->|yes| Match{Heading with matching<br>GitHub slug / title?}
+    Match -->|yes| Scroll[targetHeadingId = heading.id<br>ScrollViewProxy.scrollTo]
+    Match -->|no| Ignore[.handled]
 
-    Relative --> ResolveBase[Resolve against document baseDirectory<br>fileURL.deletingLastPathComponent]
-    ResolveBase --> CleanFrag[Strip #fragments from path]
-    CleanFrag --> CheckExt{Check Extension}
-
-    CheckExt -->|.md / .markdown / .mdown| CheckExists{File Exists on Disk?}
-    CheckExt -->|No Extension| AppendMd{Appending .md Exists?}
-    CheckExt -->|Other (.pdf / .png / .csv)| OpenWorkspace[NSWorkspace.shared.open<br>Return .handled]
-
-    AppendMd -->|Yes| OpenTab[windowState.openTab<br>Focus Existing or Append Tab<br>Return .handled]
-    AppendMd -->|No| OpenWorkspace
-
-    CheckExists -->|Yes| OpenTab
-    CheckExists -->|No| Alert[Show Native NSAlert Sheet<br>Return .handled]
+    Anchor -->|no| Resolve[Absolute file URL, or<br>baseDirectory + relative path]
+    Resolve -->|no base: unsaved doc| AlertUnsaved[Alert: save first]
+    Resolve --> NoExt{No extension and<br>name.md exists?}
+    NoExt -->|yes| Tab[openTab — focus or append]
+    NoExt -->|no| Exists{Exists on disk?}
+    Exists -->|no| AlertMissing[Alert with full path]
+    Exists -->|Markdown extension| Tab
+    Exists -->|other file / folder| Workspace[NSWorkspace.open]
 ```
 
-### Relative Path Resolution Logic
+Notes:
 
-When resolving links like `[Architecture](./docs/ARCHITECTURE.md)` from an active file at `/Users/developer/Repo/README.md`:
-
-1. **Base Directory Inference**: The base directory is derived from `tab.fileURL?.deletingLastPathComponent()`.
-2. **Standardization**: MDView standardizes the combined path using `URL.standardizedFileURL`, resolving any relative segments (`..`, `.`, symlinks).
-3. **Tab Deduplication**: Before instantiating a new tab, `WindowState.openTab(url:)` iterates over `tabs` comparing `standardizedFileURL`:
-   ```swift
-   let standardized = url.standardizedFileURL
-   if let existing = tabs.first(where: { $0.fileURL?.standardizedFileURL == standardized }) {
-       selectedTabId = existing.id
-       return
-   }
-   ```
-   This prevents duplicate buffers for the same physical file.
-
-### Anchor Scrolling via Viewport Proxy
-
-When an anchor link (e.g. `#key-features-matrix`) is clicked:
-1. `handleLinkClick` matches the fragment against the cached `[MarkdownHeading]` array.
-2. If matched, it assigns `targetHeadingId = match.id`.
-3. `MarkdownPreviewView` observes `targetHeadingId` via `.onChange`:
-   ```swift
-   .onChange(of: targetHeadingId) { _, newId in
-       if let target = newId {
-           withAnimation(.easeInOut(duration: 0.25)) {
-               proxy.scrollTo(target, anchor: .top)
-           }
-           DispatchQueue.main.async {
-               self.targetHeadingId = nil
-           }
-       }
-   }
-   ```
-This provides smooth, hardware-accelerated scrolling directly to the target header.
+- `isLinkToCurrentDocument(_:)` treats `#x`, `file:///dir/#x` and `file:///dir/this.md#x` as in-document anchors. Without it, an anchor in a saved document would resolve to the document's *folder* and open Finder.
+- Fragments are percent-decoded before matching; matching tries the GitHub slug first, then the raw title, then the internal heading id.
+- `.standardizedFileURL` collapses `.` and `..` segments before deduplicating tabs.
 
 ---
 
-## 5. High-Performance AppKit Editor Integration
+## 5. AppKit Editor Integration
 
-### Why SwiftUI TextEditor Falls Short
+### Why not `TextEditor`
 
-SwiftUI's standard `TextEditor` is a minimal wrapper over `NSTextView` that lacks:
-- Access to underlying `NSTextStorage` for syntax highlighting.
-- Access to `NSLayoutManager` for line numbers and glyph layout customization.
-- Fine-grained selection and cursor range manipulation.
-- Interception of keyboard shortcut equivalents (<kbd>⌘</kbd> <kbd>B</kbd>, <kbd>⌘</kbd> <kbd>I</kbd>, <kbd>⌘</kbd> <kbd>K</kbd>).
-
-To overcome these constraints, MDView implements `NativeMarkdownEditorView`, bridging AppKit's text system into SwiftUI via `NSViewRepresentable`.
-
-### The AppKit Bridge Architecture
+SwiftUI's `TextEditor` does not expose the `NSTextStorage`, layout manager, selection APIs or key-equivalent handling needed for syntax highlighting and Markdown shortcuts. `NativeMarkdownEditorView` bridges AppKit's text system through `NSViewRepresentable`:
 
 ```
-┌────────────────────────────────────────────────────────┐
-│             NativeMarkdownEditorView                   │
-│              (NSViewRepresentable)                     │
-└──────────────────────────┬─────────────────────────────┘
-                           │
-                           ▼
-                  ┌─────────────────┐
-                  │  NSScrollView   │
-                  └────────┬────────┘
-                           │
-                           ▼
-                  ┌─────────────────┐
-                  │MarkdownTextView │ <─── [Custom Key Handling]
-                  └────────┬────────┘
-                           │
-                           ▼
-                  ┌─────────────────┐
-                  │ NSLayoutManager │
-                  └────────┬────────┘
-                           │
-                           ▼
-               ┌───────────────────────┐
-               │  MarkdownTextStorage  │ <─── [$O(1) Paragraph Highlighting]
-               └───────────────────────┘
+NativeMarkdownEditorView (NSViewRepresentable)
+        │
+        ▼
+   NSScrollView
+        │
+        ▼
+ MarkdownTextView : NSTextView   ◄── ⌘B / ⌘I / ⌘K / ⌘1-3, drag & drop, Find bar
+        │
+        ▼
+  NSLayoutManager
+        │
+        ▼
+ MarkdownTextStorage : NSTextStorage   ◄── paragraph-scoped highlighting
 ```
 
-### The $O(1)$ Paragraph-Bounded Highlighting Engine
+The coordinator pushes edits to the `TabItem.text` binding in `textDidChange`; `updateNSView` pulls external changes back, re-applies zoom/appearance, and performs programmatic scrolls requested by the outline (`scrollToOffset`).
 
-Naive syntax highlighters re-evaluate the entire document buffer whenever text changes. For a 10,000-line document, running multiple regular expressions over the entire string on every keystroke drops framerates and causes cursor lag.
+### Paragraph-scoped highlighting
 
-MDView's `MarkdownTextStorage` subclass solves this by overriding `processEditing()` and bounding regex evaluation strictly to the **affected paragraph range**:
+`MarkdownTextStorage` keeps its content in a backing `NSMutableAttributedString` and re-styles only the paragraph(s) touched by an edit:
 
 ```swift
-final class MarkdownTextStorage: NSTextStorage {
-    private let backingStore = NSMutableAttributedString()
-
-    override func processEditing() {
-        applySyntaxHighlighting(forceFull: false)
-        super.processEditing()
+override func processEditing() {
+    if let highlighted = applySyntaxHighlighting() {
+        // Widen the edited range to the whole re-styled paragraph so the layout
+        // manager also redraws text before the cursor (e.g. the closing "*").
+        edited(.editedAttributes, range: highlighted, changeInLength: 0)
     }
+    super.processEditing()
+}
 
-    private func applySyntaxHighlighting(forceFull: Bool = false) {
-        let nsString = backingStore.string as NSString
-        let totalLength = nsString.length
-        guard totalLength > 0 else { return }
+private func applySyntaxHighlighting() -> NSRange? {
+    let nsString = backingStore.string as NSString
+    let totalLength = nsString.length
+    guard totalLength > 0, editedRange.location != NSNotFound,
+          editedRange.location <= totalLength else { return nil }
 
-        // Bounded target range calculation
-        let targetRange: NSRange
-        if !forceFull && editedRange.location != NSNotFound && editedRange.location <= totalLength {
-            let safeLocation = min(editedRange.location, max(0, totalLength - 1))
-            let safeLength = min(editedRange.length, totalLength - safeLocation)
-            targetRange = nsString.paragraphRange(for: NSRange(location: safeLocation, length: safeLength))
-        } else {
-            targetRange = NSRange(location: 0, length: totalLength)
-        }
-
-        // Apply pre-compiled regular expressions only within targetRange...
-    }
+    let safeLocation = min(editedRange.location, totalLength - 1)
+    let safeLength = min(editedRange.length, totalLength - safeLocation)
+    let targetRange = nsString.paragraphRange(for: NSRange(location: safeLocation, length: safeLength))
+    // reset base attributes, then apply the pre-compiled regexes within targetRange…
+    return targetRange
 }
 ```
 
-#### Algorithmic Complexity:
-- **Naive approach**: $O(N \cdot M)$ where $N$ is document length and $M$ is regex count.
-- **MDView approach**: $O(P \cdot M)$ where $P$ is the length of the single edited paragraph ($P \ll N$).
+Zoom or theme changes call `updateTypography(scale:appearance:)`, which marks the **whole** buffer as edited inside `beginEditing()` / `endEditing()`; `processEditing()` then re-highlights everything and the layout manager re-lays out with the new fonts.
 
-Because paragraph length $P$ is bounded by natural human writing patterns, typing performance is effectively **$O(1)$** with respect to total document size.
+**Cost:** each keystroke runs the regex set over one paragraph, so typing cost depends on paragraph length rather than document length. The trade-off is that constructs spanning paragraphs (e.g. fenced code blocks) are not highlighted as a unit.
 
-### Event Interception in MarkdownTextView
+### Key equivalents in `MarkdownTextView`
 
-`MarkdownTextView` overrides `performKeyEquivalent(with:)` to intercept command shortcuts before they bubble up to the window or menu bar:
+AppKit offers key equivalents to *every* view in the window, not only the focused one. `performKeyEquivalent(with:)` therefore acts only when the editor is the first responder and the modifiers are exactly ⌘ — so ⌘I in the preview of Split mode never edits the source, and ⇧⌘K or ⌥⌘I still reach the menu bar:
 
 ```swift
-final class MarkdownTextView: NSTextView {
-    override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        guard event.modifierFlags.contains(.command) else {
-            return super.performKeyEquivalent(with: event)
-        }
-
-        switch event.charactersIgnoringModifiers {
-        case "b", "B":
-            wrapSelection(with: "**")
-            return true
-        case "i", "I":
-            wrapSelection(with: "*")
-            return true
-        case "k", "K":
-            insertMarkdownLink()
-            return true
-        case "1":
-            onModeSwitch?(.viewer)
-            return true
-        case "2":
-            onModeSwitch?(.split)
-            return true
-        case "3":
-            onModeSwitch?(.editor)
-            return true
-        default:
-            return super.performKeyEquivalent(with: event)
-        }
-    }
+let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+guard modifiers == .command, window?.firstResponder === self else {
+    return super.performKeyEquivalent(with: event)
 }
 ```
 
-When wrapping selections (such as <kbd>⌘</kbd> <kbd>B</kbd>), the editor utilizes `replaceCharacters(in:with:)` through the standard undo manager, preserving full <kbd>⌘</kbd> <kbd>Z</kbd> undo/redo history.
+Formatting goes through `shouldChangeText` / `replaceCharacters` / `didChangeText`, so it is fully undoable. Selection offsets are computed in UTF-16 (`NSString.length`) to stay correct with emoji and other non-BMP characters.
+
+### Drag & drop and Find
+
+- `performDragOperation` opens dropped Markdown/text files as tabs (via `onOpenFiles`) and turns dropped images into `![name](relative/path)` references, computing the path relative to `documentDirectory`; anything else falls back to `NSTextView`.
+- `usesFindBar` and `isIncrementalSearchingEnabled` enable the system Find bar through the standard **Edit ▸ Find** commands.
 
 ---
 
-## 6. Asynchronous Document Telemetry Pipeline
+## 6. Headings, Outline & Lazy Rendering
 
-MDView maintains real-time statistics (word count, character count, estimated reading time) without degrading typing responsiveness. In `ContentView.swift`:
+`MarkdownHeading.parse(from:)` is a single linear pass that:
+
+- recognises ATX headings `#`–`######` (up to three leading spaces, optional closing `##`);
+- skips fenced code blocks (```` ``` ```` / `~~~`, tracking fence character and length), so `# comment` in a shell snippet is not a heading;
+- splits on the `\n` scalar so `characterOffset` is an exact UTF-16 offset, also for CRLF files;
+- produces GitHub-compatible `slug`s with `-1`, `-2` … suffixes for duplicates.
+
+`ContentView` parses once per render and passes the result to the outline and the preview(s). `MarkdownRenderSection.createSections` then cuts the document at heading offsets so the preview can render it in a `LazyVStack`, one `Markdown` view per section; each section's id equals its heading id, which is what `ScrollViewProxy.scrollTo` targets. Because headings inside code fences are ignored, a section boundary can never split a code block.
+
+---
+
+## 7. Asynchronous Statistics
 
 ```swift
 .task(id: tab.text) {
     do {
-        // Debounce typing bursts by 120 milliseconds
-        try await Task.sleep(nanoseconds: 120_000_000)
+        try await Task.sleep(nanoseconds: 120_000_000) // debounce typing bursts
     } catch {
-        return // Task cancelled by subsequent keystroke
+        return // cancelled by the next keystroke
     }
-    
-    // Process calculation on background cooperative thread pool
     let calculated = await DocumentStatistics.calculate(for: tab.text)
     self.tab.statistics = calculated
 }
 ```
 
-1. **Structured Concurrency**: Using `.task(id: tab.text)` automatically cancels any pending calculation if a new character is typed within the 120ms debounce window.
-2. **Background Execution**: `DocumentStatistics.calculate(for:)` runs off the main thread, parsing tokens in the cooperative thread pool and returning the structured result to `@MainActor` upon completion.
+1. `.task(id:)` cancels the pending computation whenever the text changes within the 120 ms window.
+2. `DocumentStatistics.calculate(for:)` runs in a detached task off the main actor and returns a `Sendable` value.
 
 ---
 
-## 7. Memory, Concurrency, and Performance Profile
+## 8. Printing & PDF Export
 
-### Memory Management
-- `TabItem` instances hold the raw string buffer and metadata. Unfocused tabs do not create active AppKit text views until selected, conserving layout caches.
-- Cached headings in `MarkdownHeading` store lightweight string slices rather than full AST copies.
+`MarkdownPrinter` (in `PrintHelpers.swift`) produces one paginated vector PDF and uses it for both outputs:
 
-### Main Thread Sanitation
-- Syntax highlighting is restricted to paragraph ranges.
-- Heavy markdown rendering (`swift-markdown-ui`) occurs in chunks segmented by heading boundaries (`MarkdownRenderSection`), avoiding single massive layout passes.
-- Middle-click mouse tracking on the Safari tab bar is implemented via a lightweight `MiddleClickDetectorView` utilizing localized hit-testing to prevent event queue contention.
+1. `PrintableMarkdownContainer` lays the document out at the printable width with `Theme.nativeMac(forPrinting: true)`: fixed light colours, and code blocks that wrap instead of sitting in a horizontal `ScrollView` (scroll views render as empty space off-screen).
+2. SwiftUI's `ImageRenderer` renders it once; inside `render { size, draw in … }` a `CGContext` PDF is created and, for every page, the tall rendering is translated and clipped so that page's slice lands inside the margins. Rendering runs under `NSAppearance(named: .aqua)` so dynamic system colours resolve to their light variants.
+3. **Export** writes that data to disk; **Print** wraps it in a `PDFDocument` and uses PDFKit's `printOperation(for:scalingMode:autoRotate:)` with zero margins (they are already part of the pages).
+
+The earlier approach — printing an `NSHostingView` with `NSPrintOperation` — silently dropped layer-backed content (code blocks, images, table borders) and could emit a trailing blank page.
+
+### Local images
+
+MarkdownUI's default providers load images through NetworkImage, which rejects anything that is not an HTTP 2xx response — so `file://` images never rendered. `LocalImageProviders.swift` adds `LocalFileImageProvider` (block images) and `LocalFileInlineImageProvider` (inline images) that read local files with `NSImage(contentsOf:)` and defer to MarkdownUI's defaults for remote URLs. Loading synchronously also means images are present when the PDF is rendered.
 
 ---
 
-## 🛠 Extension Guidelines
+## 9. Building & Tooling
 
-### Adding New Markdown Syntax Highlight Rules
-1. Define a compiled static regex in `MarkdownTextStorage.swift`:
+- **Package:** Swift Package Manager, `swift-tools-version: 6.0`, single executable target `MDView` (`Sources/MDView`), macOS 14+.
+- **Info.plist** lives in `Sources/MDView/Resources/` and is *excluded* from the target; `scripts/build-app.sh` copies it into `build/MDView.app/Contents/` together with the release binary, ad-hoc signs the bundle and registers it with Launch Services.
+- **Toolchain:** recent SDKs implement SwiftUI's `@State` as a macro whose implementation (`SwiftUIMacros`) ships with **Xcode**. With only the Command Line Tools active, `swift build` fails with *“plugin for module 'SwiftUIMacros' not found”*; select Xcode with `sudo xcode-select -s /Applications/Xcode.app` or set `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` (the build script does this automatically).
+- **Tests:** `swift test` runs the `MDViewTests` target (Swift Testing, `@testable import MDView`): heading parser and slugs, section splitting, encodings, `TabItem` save/dirty state, statistics, zoom clamping, and PDF pagination/content via PDFKit. Tests avoid `WindowManager`, whose session file lives in the user's real Application Support folder.
+
+---
+
+## 10. Extension Guidelines
+
+### Adding a syntax-highlighting rule
+
+In `Views/NativeMarkdownEditorView.swift`, inside `MarkdownTextStorage`:
+
+1. Add a pre-compiled static regex:
+
    ```swift
-   private static let highlightRegex = try! NSRegularExpression(pattern: #"==(.+?)=="#, options: [])
+   private static let highlightRegex = try! NSRegularExpression(pattern: #"==(.+?)=="#)
    ```
-2. In `applySyntaxHighlighting(forceFull:)`, enumerate matches within `targetRange`:
+
+2. Enumerate matches inside `applySyntaxHighlighting()`, limited to `targetRange`:
+
    ```swift
    Self.highlightRegex.enumerateMatches(in: nsString as String, options: [], range: targetRange) { match, _, _ in
-       guard let match = match, match.numberOfRanges >= 2 else { return }
-       backingStore.addAttribute(.backgroundColor, value: NSColor.systemYellow.withAlphaComponent(0.3), range: match.range(at: 1))
+       guard let match, match.numberOfRanges >= 2 else { return }
+       backingStore.addAttribute(.backgroundColor,
+                                 value: NSColor.systemYellow.withAlphaComponent(0.3),
+                                 range: match.range(at: 1))
    }
    ```
 
-### Adding New Document Export Formats
-Extend `PrintHelpers.swift` or create an exporter module conforming to standard macOS `NSSharingServicePicker` or `NSSavePanel` patterns.
+Write to `backingStore` (not `self`) inside the highlighter; `processEditing()` already reports the re-styled range to the layout manager.
+
+### Adding a setting
+
+Add the key to `DefaultsKey`, register its default in `MDViewApp.init`, and read it with `@AppStorage(DefaultsKey.yourKey)`.
+
+### Adding an export format
+
+Follow `MarkdownPrinter`: build the content view, present an `NSSavePanel` as a sheet (falling back to `runModal()` when no window is key), and do the work on the main actor.

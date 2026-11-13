@@ -2,14 +2,16 @@
 //  SettingsView.swift
 //  MDView
 //
-//  macOS Settings Scene (Cmd+,) for configuring theme appearance and zoom scaling.
+//  macOS Settings Scene (Cmd+,) for configuring session restoration,
+//  theme appearance, and zoom scaling.
 //
 
 import SwiftUI
 
 struct SettingsView: View {
-    @AppStorage("markdown_appearance") private var appearance: AppAppearance = .system
-    @AppStorage("markdown_font_scale") private var fontScale: Double = 1.0
+    @AppStorage(DefaultsKey.restorePreviousSession) private var restorePreviousSession: Bool = true
+    @AppStorage(DefaultsKey.appearance) private var appearance: AppAppearance = .system
+    @AppStorage(DefaultsKey.fontScale) private var fontScale: Double = 1.0
 
     var body: some View {
         TabView {
@@ -18,11 +20,21 @@ struct SettingsView: View {
                     Label("General", systemImage: "gearshape")
                 }
         }
-        .frame(width: 450, height: 230)
+        .frame(width: 470, height: 320)
     }
 
     private var generalTab: some View {
         Form {
+            Section {
+                Toggle("Restore windows and tabs on reopen", isOn: $restorePreviousSession)
+            } header: {
+                Text("Startup")
+            } footer: {
+                Text("MDView reopens the windows and tabs you had open, including unsaved Untitled drafts.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section {
                 Picker("Appearance:", selection: $appearance) {
                     ForEach(AppAppearance.allCases) { item in
@@ -38,7 +50,7 @@ struct SettingsView: View {
 
             Section {
                 HStack {
-                    Slider(value: $fontScale, in: 0.7...2.2, step: 0.1) {
+                    Slider(value: $fontScale, in: FontScale.range, step: FontScale.step) {
                         Text("Default Zoom:")
                     }
                     Text("\(Int(round(fontScale * 100)))%")
@@ -58,5 +70,9 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .padding(12)
+        .onChange(of: restorePreviousSession) { _, isOn in
+            // Apply immediately: write the current session or delete the stored one.
+            if isOn { WindowManager.shared.saveSession() } else { WindowManager.shared.clearSession() }
+        }
     }
 }

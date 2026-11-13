@@ -3,7 +3,7 @@
 //  MDView
 //
 //  A native macOS outline sidebar that displays a hierarchical Table of Contents
-//  for #, ##, and ### Markdown headings with instant jump-to-section navigation.
+//  for Markdown headings (# … ######) with instant jump-to-section navigation.
 //
 
 import SwiftUI
@@ -73,7 +73,8 @@ struct TableOfContentsSidebarView: View {
                                 .monospacedDigit()
                                 .foregroundStyle(.quaternary)
                         }
-                        .padding(.leading, CGFloat((heading.level - 1) * 12 + 8))
+                        // Indent by level, capped so H5/H6 titles keep room in a narrow sidebar.
+                        .padding(.leading, CGFloat(min(heading.level - 1, 3) * 12 + 8))
                         .padding(.trailing, 10)
                         .padding(.vertical, 5)
                         .background(
@@ -83,6 +84,8 @@ struct TableOfContentsSidebarView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .help(heading.title)
+                    .accessibilityLabel("Heading level \(heading.level): \(heading.title)")
                 }
             }
             .padding(.horizontal, 8)
@@ -100,7 +103,7 @@ struct TableOfContentsSidebarView: View {
             Text("No Headings Found")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
-            Text("Add #, ##, or ### to your document to generate an outline.")
+            Text("Start a line with # (up to ######) to add a heading to the outline.")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)

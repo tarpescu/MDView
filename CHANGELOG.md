@@ -1,0 +1,47 @@
+# Changelog
+
+All notable changes to MDView are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## [Unreleased]
+
+### Added
+- **Session restore** — windows, tabs, selected tab, per-tab mode and Untitled drafts are restored on launch (Settings → Startup). Stored in `~/Library/Application Support/MDView/session.json`.
+- **Quit protection** — quitting with unsaved documents offers *Save All / Cancel / Discard Changes*.
+- Tab context menu: Close Tab, Close Other Tabs, Reveal in Finder, Copy Path; tab tooltips show the full file path.
+- Drag & drop: Markdown files dropped on a window open as tabs; images dropped into the editor insert relative `![](…)` references.
+- Find bar in the editor (⌘F, ⌘G, ⇧⌘G).
+- Outline supports `H1`–`H6`; anchor links use GitHub-compatible slugs (including `-1`, `-2` suffixes for duplicates).
+- `scripts/build-app.sh` builds a signed `MDView.app` bundle with Finder integration.
+- Accessibility labels for icon-only buttons, tabs and outline entries.
+- Closing a window (red button / ⇧⌘W) asks to save its unsaved tabs.
+- Opening a file into a window whose only tab is an empty Untitled replaces that tab.
+- Tables and horizontal rules are styled in the preview (cell padding, header row, borders).
+- Test suite (`swift test`): 22 tests for parsing, slugs, encodings, saving, statistics, zoom and PDF output.
+
+### Fixed
+- Anchor links (`#section`) in saved documents opened the document's folder in Finder instead of scrolling.
+- `# comments` inside fenced code blocks were treated as headings, which also split code blocks apart in the preview.
+- ⌘B / ⌘I / ⌘K edited the source even when the preview had focus, and swallowed ⇧⌘K / ⌥⌘I.
+- Syntax highlighting did not always redraw text before the cursor (e.g. after typing a closing `*`), and zoom/theme changes could leave stale fonts.
+- ⌘N after a multi-window restore, or after the first save of a session, cloned an existing window's tabs into the new window.
+- Restored Untitled drafts could be closed without a save prompt.
+- Files not encoded in UTF-8 opened as empty documents and could then be overwritten with nothing on save.
+- Choosing *Save* when closing an Untitled tab no longer leaves the tab open after the file is written.
+- Print / PDF export in Dark Mode produced white text on white paper.
+- Print / PDF export dropped code blocks, images and table borders and could add a blank last page (now rendered with `ImageRenderer` into a paginated vector PDF).
+- Files opened from Finder / `open -a` spawned a new empty-looking window per file, and a file opened at cold launch could be lost — files now open as tabs in the active window.
+- Local images (`![](assets/x.png)`) never rendered: MarkdownUI's loader only accepts HTTP responses.
+- Headings in the preview lost their top spacing at section boundaries.
+- ⌘K link insertion placed the selection incorrectly after emoji.
+- Settings zoom slider (max 220 %) disagreed with the View menu (max 250 %); repeated zoom steps no longer drift (e.g. 1.2000000002).
+- The outline's visibility is remembered instead of resetting on every tab switch.
+
+### Changed
+- The session is stored only in Application Support (sessions previously kept in `UserDefaults` are migrated automatically).
+- Removed the duplicate, uncompiled copy of the sources at the repository root and the unused `MarkdownDocument` type.
+- `Info.plist` is excluded from the SwiftPM target (no more "unhandled file" warning) and gained category/copyright keys.
+- Documentation rewritten to match the actual behaviour.
+
+## [1.0.0]
+
+- Initial release: tabbed multi-window Markdown viewer/editor with Viewer, Split and Editor modes, outline sidebar, statistics, themes, zoom, print and PDF export.

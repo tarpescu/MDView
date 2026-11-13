@@ -40,7 +40,11 @@ struct MarkdownPreviewView: View {
                             ForEach(sections) { section in
                                 Markdown(section.content, baseURL: baseDirectory, imageBaseURL: baseDirectory)
                                     .markdownTheme(.nativeMac(scale: fontScale, appearance: appearance))
+                                    .localMarkdownImages()
                                     .textSelection(.enabled)
+                                    // Each section is its own Markdown view, so the heading's
+                                    // top margin would collapse; restore it between sections.
+                                    .padding(.top, sectionSpacing(for: section, in: sections))
                                     .id(section.id)
                             }
                         }
@@ -68,104 +72,102 @@ struct MarkdownPreviewView: View {
         }
     }
 
+    /// Space above a section, matching the heading margins of `Theme.nativeMac`.
+    private func sectionSpacing(for section: MarkdownRenderSection, in sections: [MarkdownRenderSection]) -> CGFloat {
+        guard section.id != sections.first?.id,
+              let level = headings.first(where: { $0.id == section.id })?.level else { return 0 }
+        let margins: [CGFloat] = [28, 22, 18, 14]
+        return margins[min(level, margins.count) - 1] * CGFloat(fontScale)
+    }
+
     // MARK: - Link Interception & Relative File Resolution
     @MainActor
     private func handleLinkClick(_ url: URL) -> OpenURLAction.Result {
         let scheme = url.scheme?.lowercased()
 
-        // 1. External Web & Protocol Links
-        if scheme == "http" || scheme == "https" || scheme == "mailto" || scheme == "tel" {
+        // 1. Non-file links (http, https, mailto, tel, custom app schemes)
+        if let scheme, scheme != "file" {
             return .systemAction
         }
 
-        // 2. Intra-Document Anchor Links (#heading)
-        let relativeString = url.relativeString
-        if relativeString.hasPrefix("#") || (scheme == nil && (url.path.isEmpty || url.path == "/") && url.fragment != nil) {
-            let fragment = (url.fragment ?? String(relativeString.dropFirst())).lowercased()
-            if let match = headings.first(where: {
-                $0.id.lowercased() == fragment ||
-                $0.title.lowercased() == fragment ||
-                $0.title.lowercased().replacingOccurrences(of: " ", with: "-") == fragment
-            }) {
+        // 2. Intra-document anchors. MarkdownUI resolves "#section" against the
+        //    base URL, so it arrives either bare or as "file:///docs/#section".
+        if let fragment = url.fragment, isLinkToCurrentDocument(url) {
+            if let match = heading(matchingFragment: fragment) {
                 targetHeadingId = match.id
-                return .handled
             }
+            return .handled
         }
 
-        // 3. Relative or Local File Links
-        guard let baseDir = baseDirectory else {
-            showFileNotFoundAlert(
+        // 3. Relative or local file links
+        let resolvedURL: URL
+        if url.isFileURL {
+            resolvedURL = URL(fileURLWithPath: url.path).standardizedFileURL
+        } else if let baseDir = baseDirectory {
+            resolvedURL = baseDir.appendingPathComponent(url.path).standardizedFileURL
+        } else {
+            showAlert(
                 title: "Cannot Open Relative Link",
-                message: "The linked path '\(relativeString)' cannot be resolved because this document has not been saved to disk yet."
+                message: "The link \u{201C}\(url.relativeString)\u{201D} cannot be resolved because this document has not been saved to disk yet."
             )
             return .handled
         }
 
-        // Strip any #anchor fragment from path
-        let rawPath = url.path.isEmpty ? relativeString : url.path
-        let cleanPath = rawPath.components(separatedBy: "#").first ?? rawPath
+        let fileManager = FileManager.default
 
-        let resolvedURL: URL
-        if url.isFileURL || scheme == "file" {
-            resolvedURL = URL(fileURLWithPath: url.path).standardizedFileURL
-        } else {
-            resolvedURL = baseDir.appendingPathComponent(cleanPath).standardizedFileURL
-        }
-
-        let ext = resolvedURL.pathExtension.lowercased()
-
-        // If it's a Markdown file, open it directly in this window as a Tab!
-        if ext == "md" || ext == "markdown" || ext == "mdown" || ext == "mkdn" {
-            if FileManager.default.fileExists(atPath: resolvedURL.path) {
-                if let onOpenRelativeTab = onOpenRelativeTab {
-                    onOpenRelativeTab(resolvedURL)
-                } else {
-                    NSDocumentController.shared.openDocument(withContentsOf: resolvedURL, display: true) { _, _, _ in }
-                }
-            } else {
-                showFileNotFoundAlert(
-                    title: "Linked File Not Found",
-                    message: "The linked Markdown file does not exist at path:\n\n\(resolvedURL.path)"
-                )
-            }
-            return .handled
-        } else if ext.isEmpty {
-            // Check if appending .md exists
+        // Extension-less links ("[Guide](GUIDE)") try "GUIDE.md" first.
+        if resolvedURL.pathExtension.isEmpty {
             let withMd = resolvedURL.appendingPathExtension("md")
-            if FileManager.default.fileExists(atPath: withMd.path) {
-                if let onOpenRelativeTab = onOpenRelativeTab {
-                    onOpenRelativeTab(withMd)
-                } else {
-                    NSDocumentController.shared.openDocument(withContentsOf: withMd, display: true) { _, _, _ in }
-                }
+            if fileManager.fileExists(atPath: withMd.path) {
+                openMarkdown(withMd)
                 return .handled
             }
+        }
 
-            if FileManager.default.fileExists(atPath: resolvedURL.path) {
-                NSWorkspace.shared.open(resolvedURL)
-            } else {
-                showFileNotFoundAlert(
-                    title: "Linked File Not Found",
-                    message: "The linked file does not exist at path:\n\n\(resolvedURL.path)"
-                )
-            }
+        guard fileManager.fileExists(atPath: resolvedURL.path) else {
+            showAlert(
+                title: "Linked File Not Found",
+                message: "The linked file does not exist at path:\n\n\(resolvedURL.path)"
+            )
             return .handled
+        }
+
+        if MarkdownFile.isMarkdown(resolvedURL) {
+            // Markdown files open as tabs in this window
+            openMarkdown(resolvedURL)
         } else {
-            // Other local files (.pdf, images, etc.) open in default viewer
-            if FileManager.default.fileExists(atPath: resolvedURL.path) {
-                NSWorkspace.shared.open(resolvedURL)
-            } else {
-                showFileNotFoundAlert(
-                    title: "Linked File Not Found",
-                    message: "The linked file does not exist at path:\n\n\(resolvedURL.path)"
-                )
-            }
-            return .handled
+            // Other local files (.pdf, images, folders…) open in their default app
+            NSWorkspace.shared.open(resolvedURL)
+        }
+        return .handled
+    }
+
+    /// True for "#x", "file:///dir/#x" and "file:///dir/this-file.md#x".
+    private func isLinkToCurrentDocument(_ url: URL) -> Bool {
+        guard url.isFileURL else { return url.path.isEmpty }
+        let target = url.standardizedFileURL.path
+        if let baseDir = baseDirectory, target == baseDir.standardizedFileURL.path { return true }
+        if let fileURL, target == fileURL.standardizedFileURL.path { return true }
+        return false
+    }
+
+    private func heading(matchingFragment rawFragment: String) -> MarkdownHeading? {
+        let fragment = (rawFragment.removingPercentEncoding ?? rawFragment).lowercased()
+        return headings.first { $0.slug == fragment }
+            ?? headings.first { $0.title.lowercased() == fragment }
+            ?? headings.first { $0.id == fragment }
+    }
+
+    private func openMarkdown(_ url: URL) {
+        if let onOpenRelativeTab {
+            onOpenRelativeTab(url)
+        } else {
+            WindowManager.shared.openURLsInActiveWindow([url])
         }
     }
 
     @MainActor
-    private func showFileNotFoundAlert(title: String, message: String) {
+    private func showAlert(title: String, message: String) {
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = message
@@ -199,12 +201,31 @@ struct MarkdownPreviewView: View {
 // MARK: - Native macOS Markdown Theme with Scaling & Appearance Support
 @MainActor
 extension Theme {
-    static func nativeMac(scale: Double = 1.0, appearance: AppAppearance = .system) -> Theme {
+    /// - Parameter forPrinting: uses fixed light colours and wraps code blocks
+    ///   instead of putting them in a horizontal ScrollView (which renders
+    ///   as empty space in PDFs).
+    static func nativeMac(scale: Double = 1.0, appearance: AppAppearance = .system, forPrinting: Bool = false) -> Theme {
         let baseFontSize = 14.0 * scale
-        let textColor = appearance == .sepia ? Color(red: 0.27, green: 0.22, blue: 0.16) : Color.primary
-        let codeBg = appearance == .sepia ? Color(red: 0.92, green: 0.88, blue: 0.79) : Color(nsColor: .quaternaryLabelColor).opacity(0.5)
-        let codeBlockBg = appearance == .sepia ? Color(red: 0.94, green: 0.90, blue: 0.82) : Color(nsColor: .controlBackgroundColor)
-        let borderColor = appearance == .sepia ? Color(red: 0.85, green: 0.80, blue: 0.70) : Color(nsColor: .separatorColor)
+        let textColor: Color
+        let codeBg: Color
+        let codeBlockBg: Color
+        let borderColor: Color
+        if forPrinting {
+            textColor = Color(white: 0.1)
+            codeBg = Color(white: 0.94)
+            codeBlockBg = Color(white: 0.965)
+            borderColor = Color(white: 0.82)
+        } else if appearance == .sepia {
+            textColor = Color(red: 0.27, green: 0.22, blue: 0.16)
+            codeBg = Color(red: 0.92, green: 0.88, blue: 0.79)
+            codeBlockBg = Color(red: 0.94, green: 0.90, blue: 0.82)
+            borderColor = Color(red: 0.85, green: 0.80, blue: 0.70)
+        } else {
+            textColor = Color.primary
+            codeBg = Color(nsColor: .quaternaryLabelColor).opacity(0.5)
+            codeBlockBg = Color(nsColor: .controlBackgroundColor)
+            borderColor = Color(nsColor: .separatorColor)
+        }
 
         return Theme()
             .text {
@@ -267,14 +288,21 @@ extension Theme {
                 .markdownMargin(top: 8 * scale, bottom: 14 * scale)
             }
             .codeBlock { configuration in
-                ScrollView(.horizontal, showsIndicators: false) {
-                    configuration.label
-                        .relativeLineSpacing(.em(0.25))
-                        .markdownTextStyle {
-                            FontFamilyVariant(.monospaced)
-                            FontSize(.em(0.88))
-                        }
-                        .padding(14 * scale)
+                let code = configuration.label
+                    .relativeLineSpacing(.em(0.25))
+                    .markdownTextStyle {
+                        FontFamilyVariant(.monospaced)
+                        FontSize(.em(0.88))
+                    }
+                    .padding(14 * scale)
+                Group {
+                    if forPrinting {
+                        code
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        ScrollView(.horizontal, showsIndicators: false) { code }
+                    }
                 }
                 .background(codeBlockBg)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -283,6 +311,29 @@ extension Theme {
                         .strokeBorder(borderColor, lineWidth: 0.5)
                 )
                 .markdownMargin(top: 8 * scale, bottom: 16 * scale)
+            }
+            .table { configuration in
+                configuration.label
+                    .fixedSize(horizontal: false, vertical: true)
+                    .markdownTableBorderStyle(.init(color: borderColor))
+                    .markdownTableBackgroundStyle(.alternatingRows(Color.clear, codeBg.opacity(0.5)))
+                    .markdownMargin(top: 4 * scale, bottom: 16 * scale)
+            }
+            .tableCell { configuration in
+                configuration.label
+                    .markdownTextStyle {
+                        if configuration.row == 0 {
+                            FontWeight(.semibold)
+                        }
+                    }
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.vertical, 6 * scale)
+                    .padding(.horizontal, 12 * scale)
+            }
+            .thematicBreak {
+                Divider()
+                    .overlay(borderColor)
+                    .markdownMargin(top: 20 * scale, bottom: 20 * scale)
             }
     }
 }

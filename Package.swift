@@ -15,7 +15,15 @@ let package = Package(
             dependencies: [
                 .product(name: "MarkdownUI", package: "swift-markdown-ui")
             ],
-            path: "Sources/MDView"
+            path: "Sources/MDView",
+            // Info.plist is not a SwiftPM resource: it is copied into the
+            // .app bundle by scripts/build-app.sh.
+            exclude: ["Resources/Info.plist"]
+        ),
+        .testTarget(
+            name: "MDViewTests",
+            dependencies: ["MDView"],
+            path: "Tests/MDViewTests"
         )
     ]
 )

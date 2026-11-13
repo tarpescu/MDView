@@ -81,3 +81,16 @@ enum AppAppearance: String, CaseIterable, Identifiable, Sendable {
         }
     }
 }
+
+// MARK: - Zoom (font scale) limits shared by the View menu and Settings
+enum FontScale {
+    static let minimum = 0.7
+    static let maximum = 2.5
+    static let step = 0.1
+    static let range = minimum...maximum
+
+    /// Clamps and rounds to one decimal so repeated ±0.1 steps don't drift.
+    static func clamped(_ value: Double) -> Double {
+        (min(max(value, minimum), maximum) * 10).rounded() / 10
+    }
+}

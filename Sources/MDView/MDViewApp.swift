@@ -8,6 +8,7 @@
 //  - Cmd+N spawns a completely new separate window instance
 //  - Cmd+T creates a new blank tab, Cmd+W closes the active tab (or window if last tab)
 //  - Cmd+Shift+] and Cmd+Shift+[ cycle through tabs
+//  - Quitting asks to save tabs with unsaved changes
 //
 
 import SwiftUI
@@ -25,6 +26,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         return true
     }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        return true
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let unsaved = WindowManager.shared.tabsAtRiskOnQuit
+        guard !unsaved.isEmpty else { return .terminateNow }
+
+        return UnsavedChanges.resolve(unsaved, whileDoing: "quitting") ? .terminateNow : .terminateCancel
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        WindowManager.shared.saveSession()
+    }
 }
 
 @main
@@ -32,14 +48,26 @@ struct MDViewApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @Environment(\.openWindow) private var openWindow
 
-    @AppStorage("markdown_font_scale") private var fontScale: Double = 1.0
-    @AppStorage("markdown_appearance") private var appearance: AppAppearance = .system
+    @AppStorage(DefaultsKey.fontScale) private var fontScale: Double = 1.0
+
+    init() {
+        UserDefaults.standard.register(defaults: [
+            DefaultsKey.restorePreviousSession: true,
+            DefaultsKey.fontScale: 1.0,
+            DefaultsKey.sidebarVisible: true
+        ])
+    }
 
     var body: some Scene {
         WindowGroup(for: UUID.self) { $windowID in
             WindowRootView(windowID: windowID)
         }
         .defaultSize(width: 900, height: 680)
+        // Without this, SwiftUI opens a brand-new window for every Finder
+        // "Open With" / Dock drop event. Opting the scene out of external
+        // events leaves them to AppDelegate.application(_:open:), which opens
+        // the files as tabs in the active window.
+        .handlesExternalEvents(matching: [])
         .commands {
             TextEditingCommands()
             ToolbarCommands()
@@ -117,25 +145,29 @@ struct MDViewApp: App {
             CommandGroup(after: .toolbar) {
                 Section {
                     Button("Zoom In") {
-                        fontScale = min(fontScale + 0.1, 2.5)
+                        fontScale = FontScale.clamped(fontScale + FontScale.step)
                     }
                     .keyboardShortcut("+", modifiers: .command)
+                    .disabled(fontScale >= FontScale.maximum)
 
-                    Button("Zoom In (Equals)") {
-                        fontScale = min(fontScale + 0.1, 2.5)
+                    // Same action on ⌘= so zooming works without Shift on US-style layouts.
+                    Button("Zoom In") {
+                        fontScale = FontScale.clamped(fontScale + FontScale.step)
                     }
                     .keyboardShortcut("=", modifiers: .command)
-                    .opacity(0)
+                    .disabled(fontScale >= FontScale.maximum)
 
                     Button("Zoom Out") {
-                        fontScale = max(fontScale - 0.1, 0.7)
+                        fontScale = FontScale.clamped(fontScale - FontScale.step)
                     }
                     .keyboardShortcut("-", modifiers: .command)
+                    .disabled(fontScale <= FontScale.minimum)
 
                     Button("Actual Size") {
                         fontScale = 1.0
                     }
                     .keyboardShortcut("0", modifiers: .command)
+                    .disabled(fontScale == 1.0)
                 }
             }
         }

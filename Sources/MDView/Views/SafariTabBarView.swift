@@ -30,7 +30,10 @@ struct SafariTabBarView: View {
                             },
                             onClose: {
                                 windowState.closeTab(id: tab.id)
-                            }
+                            },
+                            onCloseOthers: windowState.tabs.count > 1 ? {
+                                windowState.closeOtherTabs(except: tab.id)
+                            } : nil
                         )
                         .onHover { isHovered in
                             if isHovered {
@@ -59,6 +62,7 @@ struct SafariTabBarView: View {
             .buttonStyle(.plain)
             .padding(.trailing, 8)
             .help("New Tab (⌘T)")
+            .accessibilityLabel("New Tab")
             .onHover { isHoveringNewTab = $0 }
         }
         .frame(height: 38)
@@ -78,6 +82,7 @@ struct SafariTabPill: View {
     let isHovered: Bool
     let onSelect: () -> Void
     let onClose: () -> Void
+    var onCloseOthers: (() -> Void)? = nil
 
     @State private var isHoveringClose: Bool = false
 
@@ -119,6 +124,7 @@ struct SafariTabPill: View {
                     .buttonStyle(.plain)
                     .onHover { isHoveringClose = $0 }
                     .help("Close Tab (⌘W)")
+                    .accessibilityLabel("Close \(tab.title)")
                 } else {
                     Spacer().frame(width: 16)
                 }
@@ -130,9 +136,28 @@ struct SafariTabPill: View {
             .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         }
         .buttonStyle(.plain)
+        .help(tab.fileURL?.path ?? "Untitled document (not saved yet)")
+        .accessibilityLabel(tab.isModified ? "\(tab.title), edited" : tab.title)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
         .overlay(
             MiddleClickDetector(action: onClose)
         )
+        .contextMenu {
+            Button("Close Tab", action: onClose)
+            Button("Close Other Tabs") { onCloseOthers?() }
+                .disabled(onCloseOthers == nil)
+
+            if let fileURL = tab.fileURL {
+                Divider()
+                Button("Reveal in Finder") {
+                    NSWorkspace.shared.activateFileViewerSelecting([fileURL])
+                }
+                Button("Copy Path") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(fileURL.path, forType: .string)
+                }
+            }
+        }
     }
 
     @ViewBuilder
